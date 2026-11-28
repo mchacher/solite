@@ -107,7 +107,11 @@
 //!   settings at their longest (a name of 64 characters, numbers at the length of their pattern,
 //!   a manifest address and a catalogue address of 512 characters), `settings.json` written.
 //! - `recipes/install/catalogue.rs::MAX_CATALOGUE_BYTES`, `recipes/install/catalogue.rs::MAX_ENTRIES`,
-//!   `recipes/install/catalogue.rs::MAX_ENTRY_URL_CHARS`, `recipes/install/file.rs::MAX_FILE_BYTES`,
+//!   `recipes/install/catalogue.rs::MAX_ENTRY_URL_CHARS`,
+//!   `recipes/install/catalogue.rs::MAX_ENTRY_REPO_CHARS`, `recipes/install/catalogue.rs::MAX_ENTRY_TAGS`,
+//!   `recipes/install/catalogue.rs::MAX_ENTRY_TAG_CHARS`,
+//!   `recipes/install/catalogue.rs::MAX_ENTRY_LABEL_CHARS` (spec 059: an entry's `repo`, tags,
+//!   `category` and `author`, inside the same 32 KB of the catalogue), `recipes/install/file.rs::MAX_FILE_BYTES`,
 //!   `recipes/install/file.rs::MAX_SOURCE_BYTES`, `recipes/install/mod.rs::MAX_REFUSED`,
 //!   `recipes/script/load.rs::MAX_INSTALLED_ID_CHARS` (spec 042, installed script recipes): the
 //!   catalogue is read whole (32 KB) and held as 32 entries of at most that many bytes; a recipe

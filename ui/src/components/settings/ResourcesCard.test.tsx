@@ -45,9 +45,25 @@ const BOX: Resources = {
       maxUs: 0,
     },
   ],
+  catalogue: { readAt: "2026-11-27T10:00:00.000Z", error: null },
 };
 
 describe("ResourcesCard", () => {
+  it("shows when the catalogue was read, and why the last read failed", async () => {
+    mockApi({
+      [RESOURCES]: {
+        body: { ...BOX, catalogue: { readAt: BOX.catalogue.readAt, error: "no route to host" } },
+      },
+    });
+    render(<ResourcesCard />);
+    expect((await screen.findByTestId("catalogue-read")).textContent).toContain(
+      "Recipe catalogue read:",
+    );
+    expect(screen.getByTestId("catalogue-error").textContent).toBe(
+      "The catalogue could not be read: no route to host",
+    );
+  });
+
   it("shows the two memories as bars, the storage and a row per script recipe", async () => {
     mockApi({ [RESOURCES]: { body: BOX } });
     render(<ResourcesCard />);

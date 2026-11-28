@@ -63,10 +63,9 @@ impl Home {
             self.releases.note_refresh(wall);
         }
         match &op {
-            Op::Install { id } => self.check_install_id(id)?,
             Op::Update { id } => self.check_update_id(id)?,
             Op::Uninstall { id } => self.check_uninstall_id(id)?,
-            Op::Refresh | Op::Upload { .. } => {}
+            Op::Install { .. } | Op::Refresh | Op::Upload { .. } => {}
         }
         Ok(RecipeTicket {
             mark,
@@ -174,6 +173,7 @@ impl Home {
     pub(crate) fn install_commit(&mut self, id: &str, wall: u64) -> Option<String> {
         self.install.refused.retain(|refused| refused.id != id);
         self.keep_file(id);
+        self.note_installed(id, wall);
         let mono = self.mono(wall);
         self.with_engine(|engine, home| {
             engine.start_recipe_instances(home, id, "Failed to start", wall, mono);
@@ -250,6 +250,7 @@ impl Home {
     /// The new file is written: the instances start again with their settings.
     pub(crate) fn update_commit(&mut self, id: &str, wall: u64) -> Option<String> {
         self.keep_file(id);
+        self.note_installed(id, wall);
         let mono = self.mono(wall);
         self.with_engine(|engine, home| {
             engine.start_recipe_instances(home, id, "Failed to restart", wall, mono);
@@ -277,16 +278,14 @@ impl Home {
         })
     }
 
-    /// An uninstall (R3.6): the recipe's instances are deleted (as `DELETE /recipe-instances/:id`
-    /// does, `recipes.json` to write), the runtime is dropped, a refused file of that id is
-    /// forgotten. The file is the job's to remove.
+    /// An uninstall (R3.6): the runtime is dropped and the instances of the recipe stay, stopped,
+    /// with `Recipe not found: <id>` in their log (as Sowel's uninstall, which only unloads the
+    /// plugin and removes its files); a reinstall of the id starts them again. A refused file of
+    /// that id is forgotten. The file is the job's to remove.
     pub(crate) fn uninstall_step(&mut self, id: &str, wall: u64) {
-        let deleted = self.with_engine(|engine, _| engine.delete_instances_of(id));
-        if deleted > 0 {
-            self.recipes_changed = true;
-        }
-        self.with_engine(|engine, _| engine.remove_script(id, wall, false));
+        self.with_engine(|engine, _| engine.remove_script(id, wall, true));
         self.install.refused.retain(|refused| refused.id != id);
+        self.forget_installed(id);
     }
 
     /// The factory reset's part (R3.9): the installed runtimes are dropped (their instances go
@@ -301,6 +300,7 @@ impl Home {
         for id in &ids {
             self.with_engine(|engine, _| engine.remove_script(id, wall, false));
         }
+        self.install.installed_at.clear();
         let refused: Vec<String> = self
             .install
             .refused

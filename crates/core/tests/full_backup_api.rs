@@ -19,7 +19,7 @@ use solite_core::home::Home;
 use support::backup_fake::{Clock, MemFiles};
 use support::{HOST, PORT, T0, counter};
 
-const BACKUP: &str = "/api/v1/system/backup";
+const BACKUP: &str = "/api/v1/backup";
 const OCTET: &str = "application/octet-stream";
 const PASSWORD: &str = "correct horse battery";
 
@@ -167,7 +167,7 @@ fn a_get_with_the_token_is_an_export_ticket_and_a_post_with_octet_stream_a_resto
     assert!(is_streamed_request("POST", &format!("{BACKUP}?wifi=true")));
     assert!(is_streamed_request("POST", "/api/v1/system/update"));
     assert!(!is_streamed_request("GET", BACKUP));
-    assert!(!is_streamed_request("POST", "/api/v1/system/backup/"));
+    assert!(!is_streamed_request("POST", "/api/v1/backup/"));
 }
 
 #[test]
@@ -302,12 +302,21 @@ fn other_methods_are_405_and_the_old_backup_route_is_404() {
         );
     }
     for method in ["GET", "POST"] {
-        let (status, _) = server.refusal(method, "/api/v1/backup", true, Some("application/json"));
-        assert_eq!(status, 404, "{method} /api/v1/backup");
+        let (status, _) = server.refusal(
+            method,
+            "/api/v1/system/backup",
+            true,
+            Some("application/json"),
+        );
+        assert_eq!(status, 404, "{method} /api/v1/system/backup");
     }
     assert!(ROUTES.contains(&("GET", BACKUP)));
     assert!(ROUTES.contains(&("POST", BACKUP)));
-    assert!(ROUTES.iter().all(|(_, path)| *path != "/api/v1/backup"));
+    assert!(
+        ROUTES
+            .iter()
+            .all(|(_, path)| *path != "/api/v1/system/backup")
+    );
 }
 
 #[test]

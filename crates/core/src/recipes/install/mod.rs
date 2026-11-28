@@ -164,20 +164,23 @@ pub struct InstallState {
     pub storage: StorageResources,
     /// The files the saver removes (the factory reset).
     pub removals: Vec<String>,
+    /// When each installed recipe was installed (wall clock, ms), kept while the box runs and
+    /// only when the clock was set. At most `MAX_SCRIPT_RECIPES` ids: dropped at the removal.
+    pub installed_at: std::collections::HashMap<String, u64>,
 }
 
 /// What a recipe job or a refresh does (R2.4, R3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
-    /// `POST /recipes/store/refresh`.
+    /// `POST /plugins/store/refresh`.
     Refresh,
-    /// `POST /recipes/install` with `{"id"}`: the catalogue's entry.
-    Install { id: String },
-    /// `POST /recipes/install` with a signed file as the body.
+    /// `POST /plugins/install` with `{"repo"}`: the catalogue's entry of that repository.
+    Install { repo: String },
+    /// `POST /plugins/install` with a signed file as the body.
     Upload { bytes: Vec<u8> },
-    /// `POST /recipes/:id/update`.
+    /// `POST /plugins/:id/update`.
     Update { id: String },
-    /// `POST /recipes/:id/uninstall`.
+    /// `POST /plugins/:id/uninstall`.
     Uninstall { id: String },
 }
 

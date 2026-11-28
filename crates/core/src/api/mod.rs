@@ -77,12 +77,13 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/equipments/:id/order-bindings/:bindingId"),
     ("POST", "/api/v1/equipments/:id/orders/:alias"),
     ("GET", "/api/v1/recipes"),
-    ("GET", "/api/v1/recipes/store"),
-    ("POST", "/api/v1/recipes/store/refresh"),
-    ("POST", "/api/v1/recipes/install"),
-    ("POST", "/api/v1/recipes/:id/update"),
-    ("POST", "/api/v1/recipes/:id/uninstall"),
     ("GET", "/api/v1/recipes/:id"),
+    ("GET", "/api/v1/plugins"),
+    ("GET", "/api/v1/plugins/store"),
+    ("POST", "/api/v1/plugins/store/refresh"),
+    ("POST", "/api/v1/plugins/install"),
+    ("POST", "/api/v1/plugins/:id/update"),
+    ("POST", "/api/v1/plugins/:id/uninstall"),
     ("GET", "/api/v1/recipe-instances"),
     ("POST", "/api/v1/recipe-instances"),
     ("PUT", "/api/v1/recipe-instances/:id"),
@@ -109,8 +110,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/system/update"),
     ("POST", "/api/v1/system/version/check"),
     ("POST", "/api/v1/system/restart"),
-    ("GET", "/api/v1/system/backup"),
-    ("POST", "/api/v1/system/backup"),
+    ("GET", "/api/v1/backup"),
+    ("POST", "/api/v1/backup"),
 ];
 
 /// Who can reach the server: it decides which `Host` headers are accepted (spec 022, D33).
@@ -177,18 +178,18 @@ pub enum Reply {
     /// caller answers Sowel's 200 `{"success": true, "message": "Restarting"}`, then restarts the box as after an update (the
     /// host cannot: 501).
     Restart,
-    /// `GET /system/backup` with its gate passed (spec 035, R1): the caller reads the header
+    /// `GET /backup` with its gate passed (spec 035, R1): the caller reads the header
     /// `X-Backup-Password` and calls `BackupTicket::export`, then streams the archive it returns,
     /// the home's lock being released.
     BackupExport(BackupTicket),
-    /// `POST /recipes/install`, `/recipes/:id/update` or `/recipes/:id/uninstall` with its gate
+    /// `POST /plugins/install`, `/plugins/:id/update` or `/plugins/:id/uninstall` with its gate
     /// passed (spec 042 R3): the caller runs `RecipeTicket::run` on its job thread, the home's lock
     /// being released. The file of an upload is an ordinary body (at most 32 KB and a header), in the ticket.
     RecipeJob(RecipeTicket),
-    /// `POST /recipes/store/refresh` with its gate passed (spec 042 R2.4): the caller runs
+    /// `POST /plugins/store/refresh` with its gate passed (spec 042 R2.4): the caller runs
     /// `RecipeTicket::run`, as for a job.
     CatalogueRefresh(RecipeTicket),
-    /// `POST /system/backup` with its gate, content type, presence and pairing checks passed: the
+    /// `POST /backup` with its gate, content type, presence and pairing checks passed: the
     /// body is the archive, not read yet. The caller calls `BackupTicket::restore` with its
     /// reader, the lock being released. `wifi`: `?wifi=true` was given.
     BackupRestore {
@@ -394,7 +395,7 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
         return Reply::Whole(refusal);
     }
     // In safe mode nothing is accepted that would never run or never be saved (spec 036 R5); the
-    // restore (`POST /system/backup`) is refused here, before its body is read.
+    // restore (`POST /backup`) is refused here, before its body is read.
     if let Some(refusal) = safe_mode_refusal(&guard, request) {
         return Reply::Whole(refusal);
     }
@@ -463,7 +464,7 @@ fn safe_mode_refusal(home: &Home, request: &Request) -> Option<Response> {
     let first = rest.split('/').next().unwrap_or("");
     let segments: Vec<&str> = rest.split('/').collect();
     if first == "auth"
-        || matches!(segments.as_slice(), ["recipes", _, "uninstall"])
+        || matches!(segments.as_slice(), ["plugins", _, "uninstall"])
         || rest == "system/update"
         || rest == "system/version/check"
         || rest == "system/restart"
@@ -476,14 +477,14 @@ fn safe_mode_refusal(home: &Home, request: &Request) -> Option<Response> {
 /// The body's message of the safe mode's 503.
 pub const SAFE_MODE_MESSAGE: &str = "Safe mode: the engine is stopped";
 
-/// True for `/api/v1/system/backup`, with or without a query.
+/// True for `/api/v1/backup`, with or without a query.
 fn is_backup_path(path: &str) -> bool {
-    path.split(['?', '#']).next() == Some("/api/v1/system/backup")
+    path.split(['?', '#']).next() == Some("/api/v1/backup")
 }
 
 /// True for the two requests the servers must not read the body of before `handle_guarded` has
 /// answered, because it is a file they stream: `POST /api/v1/system/update` (spec 032) and `POST
-/// /api/v1/system/backup` (spec 035).
+/// /api/v1/backup` (spec 035, moved to Sowel's path by spec 059).
 pub fn is_streamed_request(method: &str, path: &str) -> bool {
     is_update_request(method, path) || (method == "POST" && is_backup_path(path))
 }
@@ -567,18 +568,19 @@ const RESTARTS_NEED_STREAMING: &str = "Restart needs the streaming handler";
 /// What the plain handlers answer to the recipe jobs: only the streaming handler takes the ticket.
 const RECIPES_NEED_STREAMING: &str = "Recipe installs need the streaming handler";
 
-/// The recipe job or refresh a path names (spec 042): `POST /recipes/install`, `/recipes/store/refresh`,
-/// `/recipes/:id/update` and `/recipes/:id/uninstall`, with or without a query.
+/// The recipe job or refresh a path names (spec 042, at Sowel's `/plugins` since spec 059): `POST
+/// /plugins/install`, `/plugins/store/refresh`, `/plugins/:id/update` and `/plugins/:id/uninstall`,
+/// with or without a query.
 fn recipe_job_path(path: &str) -> Option<Op> {
     let path = path.split(['?', '#']).next()?;
     let rest = path.strip_prefix(PREFIX)?.strip_prefix('/')?;
     match rest.split('/').collect::<Vec<_>>().as_slice() {
-        ["recipes", "install"] => Some(Op::Upload { bytes: Vec::new() }),
-        ["recipes", "store", "refresh"] => Some(Op::Refresh),
-        ["recipes", id, "update"] => Some(Op::Update {
+        ["plugins", "install"] => Some(Op::Upload { bytes: Vec::new() }),
+        ["plugins", "store", "refresh"] => Some(Op::Refresh),
+        ["plugins", id, "update"] => Some(Op::Update {
             id: (*id).to_string(),
         }),
-        ["recipes", id, "uninstall"] => Some(Op::Uninstall {
+        ["plugins", id, "uninstall"] => Some(Op::Uninstall {
             id: (*id).to_string(),
         }),
         _ => None,
@@ -602,13 +604,25 @@ fn recipe_job_reply(home: &Home, request: &Request, now: u64) -> Option<Reply> {
                     bytes: request.body.to_vec(),
                 }
             } else if json_content_type(request.content_type) {
-                let id = serde_json::from_slice::<Value>(request.body)
+                // Sowel's body: `{repo, confirmed?, expectedSha256?}`; the last two are ignored.
+                let repo = serde_json::from_slice::<Value>(request.body)
                     .ok()
-                    .and_then(|body| body.get("id").and_then(Value::as_str).map(str::to_string))
-                    .filter(|id| !id.is_empty());
-                match id {
-                    Some(id) => Op::Install { id },
-                    None => return Some(Reply::Whole(error(400, "Invalid body"))),
+                    .and_then(|body| {
+                        body.get("repo")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .map(str::to_string)
+                    });
+                match repo {
+                    Some(repo) if crate::recipes::install::catalogue::repo_format(&repo) => {
+                        Op::Install { repo }
+                    }
+                    _ => {
+                        return Some(Reply::Whole(error(
+                            400,
+                            "Invalid 'repo' field (expected owner/repo)",
+                        )));
+                    }
                 }
             } else {
                 return Some(Reply::Whole(error(415, "Unsupported Media Type")));
@@ -759,6 +773,8 @@ fn dispatch(
         Some("recipes" | "recipe-instances") => {
             recipes::route(home, &segments, request, now, random)
         }
+        Some("plugins") => recipes::plugins(home, &segments, request),
+        Some("backup") if segments.len() == 1 => method_not_allowed(),
         Some("settings") => settings::route(home, &segments, request),
         Some("auth") => auth::route(
             &mut auth::Access::Direct(home),

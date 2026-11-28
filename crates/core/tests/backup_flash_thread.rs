@@ -1,4 +1,4 @@
-//! Spec 035, the fix of 2026-11-25: on the box, `GET /api/v1/system/backup` answered 200 then the
+//! Spec 035, the fix of 2026-11-25: on the box, `GET /api/v1/backup` answered 200 then the
 //! ESP32 stopped on `assert failed: spi_flash_disable_interrupts_caches_and_other_cpu
 //! cache_utils.c:127 (esp_task_stack_is_sane_cache_disabled())`. A flash access (a read too: it
 //! turns the caches off) came from an API worker, whose stack is in PSRAM. The box runs the

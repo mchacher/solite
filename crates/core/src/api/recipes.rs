@@ -1,4 +1,4 @@
-//! `/recipes` and `/recipe-instances` (Sowel's `src/api/routes/recipes.ts`). Each route answers at
+//! `/recipes`, `/recipe-instances` and `/plugins` (Sowel's `src/api/routes/recipes.ts`). Each route answers at
 //! once: an order a recipe sends is not waited for. `GET /recipe-instances` is streamed by the
 //! caller (`ListCursor::recipe_instances`).
 
@@ -43,8 +43,6 @@ pub fn route(
     match (segments, request.method) {
         (["recipes"], "GET") => json(200, &home.recipes().recipe_infos()),
         (["recipes"], _) => method_not_allowed(),
-        (["recipes", "store"], "GET") => json(200, &home.recipe_store()),
-        (["recipes", "store"], _) => method_not_allowed(),
         (["recipes", id], "GET") => match home.recipes().recipe_info(id) {
             Some(info) => json(200, &info),
             None => error(404, "Recipe not found"),
@@ -72,6 +70,18 @@ pub fn route(
             ],
             _,
         ) => method_not_allowed(),
+        _ => error(404, "Not found"),
+    }
+}
+
+/// `/plugins` (Sowel's `src/api/routes/plugins.ts`, the recipe part): the installed recipes and
+/// the store. The `POST` routes are the streaming handler's (`Reply::RecipeJob`,
+/// `Reply::CatalogueRefresh`): only their other methods are answered here.
+pub fn plugins(home: &mut Home, segments: &[&str], request: &Request) -> Response {
+    match (segments, request.method) {
+        (["plugins"], "GET") => json(200, &home.installed_plugins()),
+        (["plugins", "store"], "GET") => json(200, &home.store_entries()),
+        (["plugins"] | ["plugins", "store"], _) => method_not_allowed(),
         _ => error(404, "Not found"),
     }
 }

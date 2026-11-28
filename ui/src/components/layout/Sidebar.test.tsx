@@ -149,26 +149,28 @@ describe("Sidebar, Administration section", () => {
 });
 
 describe("Sidebar, Plugins entry (spec 042, R5.4)", () => {
-  const catalogue = (installed: [string, string][], newer: string[]) => ({
-    recipes: installed.map(([id, version]) => ({
-      id,
-      version: newer.includes(id) ? "2.0.0" : version,
-      name: id,
-      description: "",
-      size: 1,
-      sha256: "0".repeat(64),
-      url: "",
-      installed: version,
-      refused: null,
-      builtIn: false,
-    })),
-    readAt: null,
-    error: null,
-  });
+  const catalogue = (installed: [string, string][], newer: string[]) =>
+    installed.map(([id, version]) => ({
+      manifest: {
+        id,
+        name: id,
+        version,
+        description: "",
+        repo: `solite-recipes/${id}`,
+        type: "recipe",
+      },
+      enabled: true,
+      installedAt: null,
+      status: "connected",
+      deviceCount: 0,
+      offlineDeviceCount: 0,
+      ...(newer.includes(id) ? { latestVersion: "2.0.0" } : {}),
+      source: "registry",
+    }));
 
   it("shows the count of installed recipes the catalogue has newer, on the entry", async () => {
     mockApi({
-      "GET /api/v1/recipes/store": {
+      "GET /api/v1/plugins": {
         body: catalogue(
           [
             ["a", "1.0.0"],
@@ -188,15 +190,15 @@ describe("Sidebar, Plugins entry (spec 042, R5.4)", () => {
 
   it("shows no badge when nothing is newer or the read fails", async () => {
     const api = mockApi({
-      "GET /api/v1/recipes/store": { body: catalogue([["a", "1.0.0"]], []) },
+      "GET /api/v1/plugins": { body: catalogue([["a", "1.0.0"]], []) },
     });
     show("plugins");
-    await waitFor(() => expect(api.count("GET /api/v1/recipes/store")).toBe(1));
+    await waitFor(() => expect(api.count("GET /api/v1/plugins")).toBe(1));
     expect(screen.queryByTestId("plugins-badge")).toBeNull();
     cleanup();
-    const failing = mockApi({ "GET /api/v1/recipes/store": { status: 500 } });
+    const failing = mockApi({ "GET /api/v1/plugins": { status: 500 } });
     show("plugins");
-    await waitFor(() => expect(failing.count("GET /api/v1/recipes/store")).toBe(1));
+    await waitFor(() => expect(failing.count("GET /api/v1/plugins")).toBe(1));
     expect(screen.getByRole("link", { name: "Plugins" })).toBeTruthy();
     expect(screen.queryByTestId("plugins-badge")).toBeNull();
   });

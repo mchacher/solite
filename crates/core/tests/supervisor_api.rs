@@ -57,7 +57,7 @@ impl Server {
 
     fn send(&self, method: &str, path: &str, with_token: bool, body: &[u8]) -> Reply {
         let authorization = format!("Bearer {}", self.token);
-        let content_type = if path.ends_with("/system/backup") || path.ends_with("/system/update") {
+        let content_type = if path.ends_with("/backup") || path.ends_with("/system/update") {
             "application/octet-stream"
         } else {
             "application/json"
@@ -135,7 +135,7 @@ fn in_safe_mode_a_change_is_refused_with_503_and_a_read_or_a_login_answers_as_us
             ("POST", "/api/v1/zones"),
             ("PUT", "/api/v1/settings"),
             ("POST", "/api/v1/system/factory-reset"),
-            ("POST", "/api/v1/system/backup"),
+            ("POST", "/api/v1/backup"),
             ("DELETE", "/api/v1/zones/x"),
         ] {
             let (status, body) = whole(server.send(method, path, true, br#"{"name":"A"}"#));

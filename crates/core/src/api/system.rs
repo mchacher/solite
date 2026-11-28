@@ -2,8 +2,8 @@
 //! `{tz, source, offsetHours}`; `GET /system/version`: Sowel's `VersionInfo` (spec 032, a subset:
 //! no Docker fields, `latest` from the last check's cache, spec 039). `POST /system/version/check`
 //! and `POST /system/update` are the streaming handler's
-//! (`Reply::VersionCheck`, `Reply::Update`, `Reply::UpdatePull`, spec 032 and 039, D53, D65), and so is `/system/backup` (spec 035): only their other
-//! methods are answered here. Sowel's other
+//! (`Reply::VersionCheck`, `Reply::Update`, `Reply::UpdatePull`, spec 032 and 039, D53, D65), only their other
+//! methods are answered here (`/backup` is the streaming handler's too, spec 035). Sowel's other
 //! `/system` routes (mode...) are not Solite's. `POST /system/factory-reset` is Solite's (spec 029,
 //! D48). `GET /system/supervisor` is Solite's too (spec 036, D58): the supervisor's status.
 
@@ -24,8 +24,6 @@ pub fn route(home: &mut Home, segments: &[&str], request: &Request, now: u64) ->
         (["system", "factory-reset"], "POST") => factory_reset(home, request.body, now),
         (["system", "factory-reset"], _) => method_not_allowed(),
         (["system", "version"], "GET") => version_response(&home.releases()),
-        // `GET` and `POST /system/backup` are the streaming handler's (`Reply::BackupExport` and
-        // `BackupRestore`, spec 035, D56): only its other methods are answered here.
         (["system", "supervisor"], "GET") => json(200, home.supervision()),
         // The memories, the storage and the script recipes (spec 042 R5): Solite's own.
         (["system", "resources"], "GET") => json(200, &home.resources()),
@@ -34,8 +32,7 @@ pub fn route(home: &mut Home, segments: &[&str], request: &Request, now: u64) ->
             | ["system", "version", "check"]
             | ["system", "update"]
             | ["system", "supervisor"]
-            | ["system", "resources"]
-            | ["system", "backup"],
+            | ["system", "resources"],
             _,
         ) => method_not_allowed(),
         _ => error(404, "Not found"),

@@ -108,11 +108,12 @@ export function ResourcesCard() {
     };
   }, []);
 
-  const { internal, psram, storage, scripts } = resources ?? {
+  const { internal, psram, storage, scripts, catalogue } = resources ?? {
     internal: null,
     psram: null,
     storage: null,
     scripts: [] as ScriptResource[],
+    catalogue: null,
   };
 
   return (
@@ -161,6 +162,16 @@ export function ResourcesCard() {
           {storage.total !== null
             ? t("resources.storageOf", { used: kb(storage.used), total: kb(storage.total) })
             : t("resources.storage", { used: kb(storage.used) })}
+        </p>
+      )}
+      {catalogue?.readAt && (
+        <p data-testid="catalogue-read" className="text-small text-text-secondary mb-3">
+          {t("resources.catalogueRead", { date: new Date(catalogue.readAt).toLocaleString() })}
+        </p>
+      )}
+      {catalogue?.error && (
+        <p data-testid="catalogue-error" className="text-small text-error mb-3">
+          {t("recipeStore.readError", { reason: catalogue.error })}
         </p>
       )}
       {scripts.length === 0 && resources && (

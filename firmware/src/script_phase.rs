@@ -405,8 +405,8 @@ fn job(
 /// random numbers (no key in any file), from an in-memory catalogue that lists both, on a `recipe`
 /// thread; loads each again as the start does, into a home of no use; uninstalls them. Logs
 /// `script phase: install <id>: internal RAM dip <n> KB` for each (the lowest free internal RAM
-/// below what was free before its install) and `script phase: install 201, boot load ok,
-/// uninstall 204`. The home is left as it was: the script phase's own measures follow.
+/// below what was free before its install) and `script phase: install 200, boot load ok,
+/// uninstall 200`. The home is left as it was: the script phase's own measures follow.
 #[allow(unsafe_code)]
 fn install_step(home: &Mutex<Home>) -> Result<(), String> {
     let mut seed = [0u8; 32];
@@ -454,7 +454,7 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
         catalogue: catalogue.clone(),
         files: files_by_url.clone(),
     };
-    let (mut installed, mut booted, mut removed) = (201, true, 204);
+    let (mut installed, mut booted, mut removed) = (200, true, 200);
     for (id, version) in versions {
         // The install's own window of the lowest free internal RAM.
         measure::stop_local_minimum();
@@ -462,7 +462,9 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
         let free_before = memory::read().internal_free;
         let done = job(
             home,
-            Op::Install { id: id.to_string() },
+            Op::Install {
+                repo: format!("solite-recipes/{id}"),
+            },
             &files,
             fetcher(),
             &runtimes,
@@ -489,7 +491,7 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
             &runtimes,
         );
         installed = match done {
-            Ok(201) => installed,
+            Ok(200) => installed,
             Ok(other) => other,
             Err(e) => {
                 lock(home).set_recipe_installs(kept.clone());
@@ -498,7 +500,7 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
         };
         booted &= loaded;
         removed = match gone {
-            Ok(204) => removed,
+            Ok(200) => removed,
             Ok(other) => other,
             Err(e) => {
                 lock(home).set_recipe_installs(kept.clone());
@@ -511,7 +513,7 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
         "script phase: install {installed}, boot load {}, uninstall {removed}",
         if booted { "ok" } else { "failed" }
     );
-    if installed != 201 || !booted || removed != 204 {
+    if installed != 200 || !booted || removed != 200 {
         return Err("script phase: the install step failed".to_string());
     }
     Ok(())

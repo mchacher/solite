@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 const GARAGE: &str = "../../scenarios/garage.json";
 const PASSWORD: &str = "test-password-1234";
 const BACKUP_PASSWORD: &str = "backup-secret-5678";
-const BACKUP: &str = "/api/v1/system/backup";
+const BACKUP: &str = "/api/v1/backup";
 /// The home's files and the network's, under the host's names.
 const FILES: [&str; 6] = [
     "devices.json",
@@ -472,8 +472,8 @@ fn the_refusals_close_the_connection_and_a_length_over_the_bound_is_413_before_a
     );
     assert_eq!(too_long.status, 413, "{}", too_long.text());
     assert_eq!(too_long.answers, 1);
-    // The old route is gone.
-    let old = serving.authorized("GET", "/api/v1/backup", &[], "application/json");
+    // The old route (before spec 059) is gone.
+    let old = serving.authorized("GET", "/api/v1/system/backup", &[], "application/json");
     assert_eq!(old.status, 404);
     nothing_left(&data);
 }

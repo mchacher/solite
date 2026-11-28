@@ -583,11 +583,11 @@ fn home_fake(devices: Arc<Mutex<String>>, sunrise: &'static str) -> Handler {
         ("POST", "/api/v1/integrations/solite/permit-join") => {
             (202, r#"{"permitJoin":false,"remaining":0}"#.into())
         }
-        ("GET", "/api/v1/system/backup") => match r.header("x-backup-password") {
+        ("GET", "/api/v1/backup") => match r.header("x-backup-password") {
             Some(_) => (200, "SOLITEBK-fake-archive".into()),
             None => (400, r#"{"error":"Backup password required"}"#.into()),
         },
-        ("POST", "/api/v1/system/backup") => {
+        ("POST", "/api/v1/backup") => {
             (400, r#"{"error":"Wrong backup password"}"#.into())
         }
         ("PUT", "/api/v1/settings") => (200, r#"{"success":true}"#.into()),
@@ -637,7 +637,7 @@ fn a_restore_refused_for_presence_or_pairing_is_not_checked_rather_than_ko() {
         let devices = Arc::new(Mutex::new("[]".to_string()));
         let inner = home_fake(devices, "none");
         let handler: Handler = Arc::new(move |r: &Req| {
-            if r.method == "POST" && r.path == "/api/v1/system/backup" {
+            if r.method == "POST" && r.path == "/api/v1/backup" {
                 (status, text.to_string())
             } else {
                 inner(r)
@@ -729,11 +729,11 @@ fn busy_fake(fifth_answers_200: bool) -> Handler {
         ("POST", "/api/v1/integrations/solite/permit-join") => {
             (202, r#"{"permitJoin":false,"remaining":0}"#.into())
         }
-        ("GET", "/api/v1/system/backup") => match r.header("x-backup-password") {
+        ("GET", "/api/v1/backup") => match r.header("x-backup-password") {
             Some(_) => (200, "SOLITEBK-fake-archive".into()),
             None => (400, r#"{"error":"Backup password required"}"#.into()),
         },
-        ("POST", "/api/v1/system/backup") => (400, r#"{"error":"Wrong backup password"}"#.into()),
+        ("POST", "/api/v1/backup") => (400, r#"{"error":"Wrong backup password"}"#.into()),
         ("GET", "/api/v1/settings") => (200, "{}".into()),
         ("PUT", "/api/v1/settings") => (200, r#"{"success":true}"#.into()),
         ("GET", "/api/v1/system/timezone") => (
@@ -2401,23 +2401,23 @@ fn script_fake(
             ("POST", "/api/v1/integrations/solite/permit-join") => {
                 (202, r#"{"permitJoin":false,"remaining":0}"#.into())
             }
-            ("POST", "/api/v1/recipes/install") => {
+            ("POST", "/api/v1/plugins/install") => {
                 st.uploaded = Some(r.body.clone());
                 st.upload_type = r.header("content-type").map(str::to_string);
                 match st.upload_status {
-                    Some(status) if status != 201 => (
+                    Some(status) if status != 200 => (
                         status,
                         r#"{"error":"Recipe installs are not configured"}"#.into(),
                     ),
                     _ => {
                         st.installed = true;
-                        (201, r#"{"id":"motion-light","version":"1.1.2"}"#.into())
+                        (200, r#"{"success":true}"#.into())
                     }
                 }
             }
-            ("POST", "/api/v1/recipes/motion-light/uninstall") => {
+            ("POST", "/api/v1/plugins/motion-light/uninstall") => {
                 st.installed = false;
-                (204, String::new())
+                (200, r#"{"success":true}"#.into())
             }
             ("GET", "/api/v1/recipes") => {
                 if has_recipe || st.installed {
@@ -2635,7 +2635,7 @@ fn an_uploaded_recipe_no_instance_uses_is_uninstalled_again() {
     assert!(
         st.calls
             .join("\n")
-            .contains("POST /api/v1/recipes/motion-light/uninstall")
+            .contains("POST /api/v1/plugins/motion-light/uninstall")
     );
 }
 
@@ -2740,7 +2740,7 @@ fn install_lines_with_dip(step: &str, unused: &[u32], dip_kb: u32) -> String {
 
 #[test]
 fn the_install_step_needs_its_line_its_statuses_and_a_recipe_thread_stack_of_2048_unused() {
-    let step = "install 201, boot load ok, uninstall 204";
+    let step = "install 200, boot load ok, uninstall 200";
     let (ok, reason) = recipe_install_check(&install_lines(step, &[6000, 5200]));
     assert!(ok, "{reason}");
     // Exactly the margin passes, one byte under fails, whichever of the jobs it was.
@@ -2759,13 +2759,13 @@ fn the_install_step_needs_its_line_its_statuses_and_a_recipe_thread_stack_of_204
     assert!(!ok);
     assert!(reason.contains("install step's line"), "{reason}");
     let (ok, reason) = recipe_install_check(&install_lines(
-        "install 409, boot load ok, uninstall 204",
+        "install 409, boot load ok, uninstall 200",
         &[6000],
     ));
     assert!(!ok);
     assert!(reason.contains("the install step went wrong"), "{reason}");
     let (ok, _) = recipe_install_check(&install_lines(
-        "install 201, boot load failed, uninstall 204",
+        "install 200, boot load failed, uninstall 200",
         &[6000],
     ));
     assert!(!ok);
