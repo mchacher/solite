@@ -2740,7 +2740,7 @@ fn install_lines_with_dip(step: &str, unused: &[u32], dip_kb: u32) -> String {
 
 #[test]
 fn the_install_step_needs_its_line_its_statuses_and_a_recipe_thread_stack_of_2048_unused() {
-    let step = "install 201, boot load ok, uninstall 204";
+    let step = "install 200, boot load ok, uninstall 200";
     let (ok, reason) = recipe_install_check(&install_lines(step, &[6000, 5200]));
     assert!(ok, "{reason}");
     // Exactly the margin passes, one byte under fails, whichever of the jobs it was.
@@ -2759,13 +2759,13 @@ fn the_install_step_needs_its_line_its_statuses_and_a_recipe_thread_stack_of_204
     assert!(!ok);
     assert!(reason.contains("install step's line"), "{reason}");
     let (ok, reason) = recipe_install_check(&install_lines(
-        "install 409, boot load ok, uninstall 204",
+        "install 409, boot load ok, uninstall 200",
         &[6000],
     ));
     assert!(!ok);
     assert!(reason.contains("the install step went wrong"), "{reason}");
     let (ok, _) = recipe_install_check(&install_lines(
-        "install 201, boot load failed, uninstall 204",
+        "install 200, boot load failed, uninstall 200",
         &[6000],
     ));
     assert!(!ok);

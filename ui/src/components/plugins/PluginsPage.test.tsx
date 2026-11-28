@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInfo, Resources, StoreEntry } from "../../api";
-import { mockApi, recipeInstance, resetStores } from "../../test-utils";
+import { mockApi, resetStores } from "../../test-utils";
 import { resetRecipeUpdates } from "../layout/useRecipeUpdates";
 import { Sidebar } from "../layout/Sidebar";
 import { PluginsPage } from "./PluginsPage";
@@ -321,28 +321,54 @@ describe("PluginsPage", () => {
     expect(api.count(UNINSTALL_A)).toBe(0);
   });
 
-  it.each([
-    [0, "Confirm?"],
-    [1, "Confirm? 1 instance will be deleted"],
-    [2, "Confirm? 2 instances will be deleted"],
-  ])("names the %i instances that a removal deletes", async (count, label) => {
-    const mine = Array.from({ length: count }, (_, n) =>
-      recipeInstance(`a${n}`, {}, { recipeId: "a" }),
-    );
+  it("offers no Remove for a recipe of the host's own script, and no Install for an incompatible entry", async () => {
+    const own: Resources = {
+      ...resources(),
+      scripts: [
+        {
+          id: "a",
+          version: "1.0.0",
+          source: "builtIn",
+          state: "ready",
+          reason: null,
+          held: 0,
+          limit: 0,
+          instances: 0,
+          calls: 0,
+          averageUs: 0,
+          maxUs: 0,
+        },
+      ],
+    };
     mockApi({
-      [PLUGINS]: { body: [plugin("a", "1.0.0")] },
-      [STORE]: { body: [] },
-      [REFRESH]: REFRESHED,
-      [RESOURCES]: { body: resources() },
-      "GET /api/v1/recipe-instances": {
-        body: [...mine, recipeInstance("other", {})],
+      [PLUGINS]: { body: [plugin("a", "1.0.0"), plugin("b", "1.0.0")] },
+      [STORE]: {
+        body: [
+          entry("c", "1.0.0", { compatible: false, compatReason: "Requires Solite >= 9.0.0" }),
+          entry("d", "1.0.0"),
+        ],
       },
-      [UNINSTALL_A]: { body: { success: true } },
+      [REFRESH]: REFRESHED,
+      [RESOURCES]: { body: own },
     });
     render(<PluginsPage />);
     const a = await screen.findByTestId("recipe-a");
-    fireEvent.click(within(a).getByRole("button", { name: "Remove" }));
-    expect(await within(a).findByRole("button", { name: label })).toBeTruthy();
+    const b = screen.getByTestId("recipe-b");
+    await waitFor(() => expect(within(a).queryByRole("button", { name: "Remove" })).toBeNull());
+    expect(within(b).getByRole("button", { name: "Remove" })).toBeTruthy();
+    tab(/^Store/);
+    const c = await screen.findByTestId("recipe-c");
+    expect(
+      within(c)
+        .getByRole("button", { name: /Install/ })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(within(c).getByText("Requires Solite >= 9.0.0")).toBeTruthy();
+    expect(
+      within(screen.getByTestId("recipe-d"))
+        .getByRole("button", { name: /Install/ })
+        .hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   it("says why when the refresh at opening is refused, not that the catalogue is empty", async () => {

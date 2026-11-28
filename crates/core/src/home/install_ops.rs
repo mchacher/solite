@@ -242,7 +242,7 @@ impl Home {
                     repo: entry
                         .map_or_else(|| format!("solite-recipes/{}", row.id), |e| e.repo.clone()),
                     kind: "recipe",
-                    category: entry.and_then(|e| e.category.as_deref()),
+                    category: Some(entry.and_then(|e| e.category.as_deref()).unwrap_or("other")),
                     author: entry.and_then(|e| e.author.as_deref()),
                     id: row.id,
                 },

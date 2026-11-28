@@ -16,7 +16,6 @@ import { ArrowUpCircle, Download, Loader2, Package, Search, SearchX, X } from "l
 import {
   getPlugins,
   getPluginStore,
-  getRecipeInstances,
   getResources,
   installRecipe,
   refreshPluginStore,
@@ -51,6 +50,8 @@ interface Row {
   /** The catalogue's newer version, set for an installed recipe that has one. */
   latest?: string;
   repo: string;
+  /** The catalogue says this firmware cannot run it (`compatible: false`). */
+  incompatible?: boolean;
 }
 
 const installedOf = (plugin: PluginInfo): Row => ({
@@ -68,6 +69,7 @@ const storeOf = (entry: StoreEntry): Row => ({
   description: entry.description,
   version: entry.version,
   repo: entry.repo,
+  incompatible: !entry.compatible,
 });
 
 const matches = (entry: Row, query: string) =>
@@ -88,8 +90,8 @@ export function PluginsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   /** The recipe whose Remove was clicked once: the next click uninstalls. */
   const [confirming, setConfirming] = useState<string | null>(null);
-  /** How many instances the recipe being confirmed has: they are deleted with it (R3.6). */
-  const [instanceCount, setInstanceCount] = useState(0);
+  /** The recipes of the host's own scripts (`--recipe-script`): they cannot be removed. */
+  const [builtIn, setBuiltIn] = useState<string[]>([]);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const alive = useRef(true);
 
@@ -108,6 +110,7 @@ export function PluginsPage() {
         (r) => {
           if (!alive.current) return;
           setFiles(r.scripts.filter((s) => s.state === "refused"));
+          setBuiltIn(r.scripts.filter((s) => s.source === "builtIn").map((s) => s.id));
           setCatalogue(r.catalogue);
         },
         () => undefined,
@@ -189,13 +192,6 @@ export function PluginsPage() {
       onClick={() => {
         if (confirming !== id) {
           setConfirming(id);
-          setInstanceCount(0);
-          // The count as the box holds it now; a failed read leaves the plain "Confirm?".
-          void getRecipeInstances().then(
-            (list) =>
-              alive.current && setInstanceCount(list.filter((i) => i.recipeId === id).length),
-            () => undefined,
-          );
           return;
         }
         void act(id, () => uninstallRecipe(id), t("recipeStore.removed"));
@@ -207,11 +203,7 @@ export function PluginsPage() {
           : BUTTON_SECONDARY
       }
     >
-      {confirming === id
-        ? instanceCount > 0
-          ? t("plugins.uninstallConfirmCount", { count: instanceCount })
-          : t("plugins.uninstallConfirm")
-        : t("recipeStore.remove")}
+      {confirming === id ? t("plugins.uninstallConfirm") : t("recipeStore.remove")}
     </button>
   );
 
@@ -268,7 +260,7 @@ export function PluginsPage() {
           </span>
         )}
         {entry.latest && updateButton(entry)}
-        {removeButton(entry.id)}
+        {!builtIn.includes(entry.id) && removeButton(entry.id)}
       </div>
     </div>
   );
@@ -306,6 +298,9 @@ export function PluginsPage() {
   /** Why a file of that id was refused at start, if one was. */
   const refusedOf = (id: string) => files.find((f) => f.id === id)?.reason ?? null;
 
+  /** The reason the catalogue's entry gives (`Requires Solite >= x`). */
+  const incompatibleText = (id: string) => store.find((e) => e.id === id)?.compatReason ?? "";
+
   const storeRow = (entry: Row) => (
     <div
       key={entry.id}
@@ -321,11 +316,16 @@ export function PluginsPage() {
         ),
       )}
       <div className="flex items-center justify-end gap-1 shrink-0 basis-full sm:basis-auto px-4 pb-3 sm:pb-0">
+        {entry.incompatible && (
+          <span data-testid={`incompatible-${entry.id}`} className="text-micro text-error">
+            {incompatibleText(entry.id)}
+          </span>
+        )}
         <button
           type="button"
-          disabled={busy !== null}
+          disabled={busy !== null || entry.incompatible}
           onClick={() => act(entry.id, () => installRecipe(entry.repo), t("recipeStore.installed"))}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-caption font-medium text-white bg-primary-fill hover:bg-primary-fill-hover rounded-sm transition-colors cursor-pointer disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-caption font-medium text-white bg-primary-fill hover:bg-primary-fill-hover rounded-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {busy === entry.id ? (
             <Loader2 size={14} className="animate-spin" />

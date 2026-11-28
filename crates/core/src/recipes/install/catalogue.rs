@@ -24,6 +24,11 @@ pub const MAX_ENTRY_TAGS: usize = 8;
 pub const MAX_ENTRY_TAG_CHARS: usize = 32;
 /// The longest `category` and `author` of an entry, in characters.
 pub const MAX_ENTRY_LABEL_CHARS: usize = 64;
+/// Sowel's recipe categories (`RECIPE_CATEGORIES`, `src/packages/registry-types.ts`): any other
+/// `category` of an entry is dropped, as Sowel treats it as absent.
+pub const RECIPE_CATEGORIES: [&str; 6] = [
+    "lighting", "climate", "water", "schedule", "safety", "energy",
+];
 /// The catalogue's default address.
 pub const DEFAULT_CATALOGUE_URL: &str =
     "https://github.com/mchacher/solite-recipes/releases/latest/download/recipes.json";
@@ -180,6 +185,15 @@ pub fn parse(body: &[u8]) -> Result<Vec<Entry>, String> {
                 .any(|tag| tag.chars().count() > MAX_ENTRY_TAG_CHARS)
         {
             return Err(bad("tags"));
+        }
+    }
+    for entry in &mut entries {
+        if entry
+            .category
+            .as_deref()
+            .is_some_and(|c| !RECIPE_CATEGORIES.contains(&c))
+        {
+            entry.category = None;
         }
     }
     Ok(entries)

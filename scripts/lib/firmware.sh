@@ -245,7 +245,7 @@ fw_check_script_source() {
 }
 
 # The install step of the QEMU image's script phase (spec 042, `firmware/src/script_phase.rs`), $1
-# the log: `script phase: install 201, boot load ok, uninstall 204` is there, and every `recipe:
+# the log: `script phase: install 200, boot load ok, uninstall 200` is there, and every `recipe:
 # thread stack <n> of 20480 bytes never used` line (one per job) keeps at least RECIPE_STACK_MARGIN
 # bytes unused, and `script phase: install schedule-on-off: internal RAM dip <n> KB` is at most
 # RECIPE_LOAD_DIP_KB. Prints the reason and returns 1 otherwise.
@@ -257,7 +257,7 @@ RECIPE_LOAD_DIP_KB=60
 fw_check_recipe_install() {
   step=$(grep -a 'script phase: install ' "$1" | tail -n 1)
   [ -n "$step" ] || { echo "the install step's line (script phase: install ...) is missing."; return 1; }
-  echo "$step" | grep -qF 'install 201, boot load ok, uninstall 204' \
+  echo "$step" | grep -qF 'install 200, boot load ok, uninstall 200' \
     || { echo "the install step went wrong: ${step#*script phase: }"; return 1; }
   dip=$(grep -a 'script phase: install schedule-on-off: internal RAM dip ' "$1" | tail -n 1 | sed -E 's/.*dip ([0-9]+) KB.*/\1/')
   [ -n "$dip" ] || { echo "the install step's line for schedule-on-off (internal RAM dip) is missing."; return 1; }

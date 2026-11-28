@@ -1792,7 +1792,7 @@ fn an_entry_that_needs_a_newer_firmware_is_409() {
 }
 
 #[test]
-fn an_install_after_an_uninstall_finds_no_instance_to_start() {
+fn an_install_after_an_uninstall_starts_the_enabled_instances_it_kept() {
     let mut world = World::new();
     world.installed("a", "1.0.0");
     let one = world.instance("a");
@@ -1809,15 +1809,13 @@ fn an_install_after_an_uninstall_finds_no_instance_to_start() {
         200
     );
     assert!(world.running(&one) && !world.running(&two));
-    // An uninstall deletes them (R3.6): a new install starts none.
+    // An uninstall keeps them, stopped (R3.6): a new install starts the enabled one only.
     assert_eq!(world.uninstall("a").0, 200);
     assert!(!world.running(&one));
+    assert_eq!(world.lock().recipes().instances().count(), 2);
     world.installed("a", "1.0.0");
-    assert!(
-        !world.running(&one),
-        "the deleted instance does not come back"
-    );
-    assert!(world.lock().recipes().instances().next().is_none());
+    assert!(world.running(&one), "the kept instance runs again");
+    assert!(!world.running(&two), "the disabled one stays stopped");
 }
 
 fn kept_instance(id: &str, params: &Value) -> RecipeInstance {
@@ -2086,7 +2084,8 @@ fn restored(recipe: &str, id: &str) -> RecipeInstance {
 }
 
 #[test]
-fn an_uninstall_deletes_the_instances_in_every_zone_drops_the_runtime_and_removes_the_file() {
+fn an_uninstall_keeps_the_instances_stopped_drops_the_runtime_removes_the_file_and_a_reinstall_runs_them()
+ {
     let mut world = World::new();
     let (a, b) = (
         signed(&world.signing.clone(), "a", "1.0.0"),
@@ -2130,39 +2129,32 @@ fn an_uninstall_deletes_the_instances_in_every_zone_drops_the_runtime_and_remove
     assert_eq!(world.file("a"), None);
     assert!(world.lock().recipes().recipe_info("a").is_none());
     let (_, list) = world.get("/api/v1/recipe-instances");
-    let ids: Vec<&str> = list
+    let mut ids: Vec<&str> = list
         .as_array()
         .unwrap()
         .iter()
         .map(|i| i["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, [other.as_str()]);
+    ids.sort_unstable();
+    let mut expected = [one.as_str(), two.as_str(), other.as_str()];
+    expected.sort_unstable();
     assert_eq!(
-        world.get(&format!("/api/v1/recipe-instances/{one}/log")).1,
-        json!([]),
-        "the log goes with the instance"
+        ids, expected,
+        "Sowel keeps the instances of an uninstalled recipe"
     );
-    // The saver is asked to write recipes.json, without them.
-    let mut home = world.lock();
-    let mut cursor = home.take_recipes_cursor().expect("recipes.json to write");
-    let mut text = String::new();
-    while let Some(chunk) = cursor.next_chunk(&home).unwrap() {
-        text.push_str(&chunk);
-    }
-    let written: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(written.as_array().unwrap().len(), 1);
-    assert_eq!(written[0]["id"], other.as_str());
-    // One removed event per instance.
-    let batch: Value = serde_json::from_str(&hub.take_batch(client).unwrap()).unwrap();
-    let removed: Vec<&str> = batch
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|e| e["type"] == "recipe.instance.removed")
-        .map(|e| e["instanceId"].as_str().unwrap())
-        .collect();
-    assert_eq!(removed.len(), 2, "{batch}");
-    assert!(removed.contains(&one.as_str()) && removed.contains(&two.as_str()));
+    let log = world.get(&format!("/api/v1/recipe-instances/{one}/log")).1;
+    assert!(
+        log.to_string().contains("Recipe not found: a"),
+        "the log says why it does not run: {log}"
+    );
+    // No instance was removed: no event, nothing written for them.
+    let batch = hub.take_batch(client).unwrap_or_default();
+    assert!(!batch.contains("recipe.instance.removed"), "{batch}");
+    drop(hub);
+    // A reinstall of the same id runs them again.
+    assert_eq!(world.install_id("a").0, 200);
+    assert!(world.running(&one) && world.running(&two));
+    assert!(world.running(&other));
 }
 
 #[test]
@@ -2189,9 +2181,8 @@ fn an_uninstall_removes_a_refused_file_too() {
     assert_eq!(world.lock().resources().scripts[0].state, "refused");
     assert_eq!(world.lock().recipes().instances().count(), 1);
     assert_eq!(world.uninstall("bad").0, 200);
-    // The instance the refused file left goes with it.
-    assert_eq!(world.lock().recipes().instances().count(), 0);
-    assert!(world.lock().recipes_changed());
+    // The instance the refused file left stays, as the uninstall of any recipe.
+    assert_eq!(world.lock().recipes().instances().count(), 1);
     assert!(world.storage.file("scripts/bad.srs").is_none());
     assert!(world.lock().resources().scripts.is_empty());
 }
@@ -2476,11 +2467,10 @@ fn in_the_safe_mode_the_uninstall_goes_through_and_install_update_and_refresh_ar
     // The GETs answer.
     assert_eq!(world.get("/api/v1/plugins/store").0, 200);
     assert_eq!(world.get("/api/v1/system/resources").0, 200);
-    // The uninstall removes the refused file and the recipe's instance.
+    // The uninstall removes the refused file and keeps the recipe's instance.
     assert_eq!(world.uninstall("a").0, 200);
     assert!(world.storage.file("scripts/a.srs").is_none());
-    assert_eq!(world.lock().recipes().instances().count(), 0);
-    assert!(world.lock().recipes_changed());
+    assert_eq!(world.lock().recipes().instances().count(), 1);
 }
 
 // ---- The factory reset (R3.9) ----
@@ -3127,6 +3117,69 @@ fn a_recipe_written_after_a_factory_reset_is_not_removed_by_the_saver_that_still
     saver.tick(&world.home, T0 + 1, true).unwrap();
     assert!(world.file("a").is_some(), "the new file stays");
     assert!(!world.lock().has_removals());
+}
+
+#[test]
+fn a_factory_reset_forgets_the_installed_at_time_of_a_recipe() {
+    let mut world = World::new();
+    let signing = world.signing.clone();
+    let a = signed(&signing, "a", "1.0.0");
+    world.serve(&[("a", "1.0.0", &a)]);
+    assert_eq!(world.install_id("a").0, 200);
+    let at = |world: &mut World| world.get("/api/v1/plugins").1[0]["installedAt"].clone();
+    let first = at(&mut world);
+    assert!(first.is_string(), "{first}");
+    let (status, _) = world.call("POST", "/api/v1/system/factory-reset", Some(JSON), b"{}");
+    assert_eq!(status, 204);
+    world.relogin();
+    world.clock.set(world.clock.get() + 120 * SECOND);
+    assert_eq!(world.upload(&a).0, 200);
+    let second = at(&mut world);
+    assert_ne!(first, second, "the old time is not kept");
+}
+
+#[test]
+fn a_category_outside_sowels_is_dropped_and_an_installed_recipe_without_one_is_other() {
+    let mut world = World::new();
+    let signing = world.signing.clone();
+    let (a, b, c) = (
+        signed(&signing, "a", "1.0.0"),
+        signed(&signing, "b", "1.0.0"),
+        signed(&signing, "c", "1.0.0"),
+    );
+    let mut with = entry("a", "1.0.0", &a, &file_url("a", "1.0.0"));
+    with["category"] = json!("lights");
+    let mut good = entry("b", "1.0.0", &b, &file_url("b", "1.0.0"));
+    good["category"] = json!("lighting");
+    let mut other = entry("c", "1.0.0", &c, &file_url("c", "1.0.0"));
+    other["category"] = json!("energy");
+    world.fetch.serve(
+        DEFAULT_CATALOGUE_URL,
+        Answer::Body(catalogue_of(&[with, good, other])),
+    );
+    for (id, bytes) in [("a", &a), ("b", &b), ("c", &c)] {
+        world
+            .fetch
+            .serve(&file_url(id, "1.0.0"), Answer::Body(bytes.to_vec()));
+    }
+    assert_eq!(world.refresh().0, 200);
+    let (_, store) = world.get("/api/v1/plugins/store");
+    assert!(store[0].get("category").is_none(), "{store}");
+    assert_eq!(store[1]["category"], "lighting");
+    assert_eq!(world.install_id("a").0, 200);
+    assert_eq!(world.install_id("b").0, 200);
+    let (_, installed) = world.get("/api/v1/plugins");
+    let category = |id: &str| {
+        installed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["manifest"]["id"] == id)
+            .unwrap()["manifest"]["category"]
+            .clone()
+    };
+    assert_eq!(category("a"), "other");
+    assert_eq!(category("b"), "lighting");
 }
 
 // ---- The resources (R5) ----

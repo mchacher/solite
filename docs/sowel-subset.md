@@ -299,7 +299,9 @@ store. Differences of value, none a new name:
   always `true` and `tier` `official` (the one catalogue is the author's); `compatReason` reads
   `Requires Solite >= x`, where Sowel's reads `Requires Sowel >= x`. The catalogue's `repo`
   (`owner/name`), `category`, `author` and `tags` are optional: an entry without a `repo` gets
-  `solite-recipes/<id>`.
+  `solite-recipes/<id>`. A `category` that is not one of Sowel's (`lighting`, `climate`, `water`,
+  `schedule`, `safety`, `energy`) is dropped, and `GET /api/v1/plugins` gives an installed recipe
+  without one the category `other`, as Sowel does.
 - `POST /api/v1/plugins/store/refresh` answers `{count, source}`, `source` `remote` (a read) or
   `local` (a failed read keeps the held list, the reason is in the log and in `GET
   /system/resources`), and at most once a minute (429, Sowel 10 s).
@@ -310,7 +312,7 @@ store. Differences of value, none a new name:
   `Recipe already installed`.
 - `POST /api/v1/plugins/:id/update` and `/uninstall` answer `{"success": true}`; their statuses
   are Solite's (404 unknown, 409 while another job runs or when nothing is newer, Sowel 500). An
-  uninstall removes the recipe's file and its instances.
+  uninstall removes the recipe's file and keeps its instances, as Sowel's.
 - `GET` and `POST /api/v1/backup` are Sowel's paths with Solite's file (D56): a password-protected
   archive in `X-Backup-Password`, not Sowel's ZIP. Sowel's `/backup/local` and
   `/backup/restore-local` are not served.

@@ -1093,7 +1093,7 @@ same routes and from a room's page, with the same log, state and events.
   `{"format": 1, "recipes": [{id, version, name, description, i18n?, icon?, size, sha256, url,
   minVersion?, repo?, category?, author?, tags?}]}`, at most 32 entries and 32 KB (`repo`: `owner/name`, at
   most 100 characters, unique, `solite-recipes/<id>` when absent; `category` and `author` at most
-  64 characters; at most 8 tags of 32 characters), `size` at most 32,896 bytes; refused as a whole, the
+  64 characters, and a `category` outside Sowel's six (`lighting`, `climate`, `water`, `schedule`, `safety`, `energy`) is dropped; at most 8 tags of 32 characters), `size` at most 32,896 bytes; refused as a whole, the
   last good list kept, when over a bound, not JSON, of another format, an entry's `i18n` is not a JSON object, an entry's `repo` is malformed or repeated (`Invalid catalogue: <id>: repo`), or an entry's `url` breaks
   the update URL rule (https, or http on the home network). Its address is the setting
   `recipes.catalogue` (at most 512 characters, the same rule, 400 at the save; empty or unset
@@ -1111,7 +1111,7 @@ same routes and from a room's page, with the same log, state and events.
   /recipes/store` meets `GET /recipes/:id` and answers 404 `Recipe not found`):
   `GET /api/v1/plugins` answers what the box holds, never the network: Sowel's `PluginInfo` of
   each script recipe running (the `--recipe-script` ones too): `{"manifest": {id, name, version,
-  description, icon?, repo, "type": "recipe", category?, author?}, "enabled": true, "installedAt"
+  description, icon?, repo, "type": "recipe", category (`other` when the catalogue gives none), author?}, "enabled": true, "installedAt"
   (ISO 8601, `null` when the clock was not set at the install or the box restarted since),
   "status": "connected", "deviceCount": 0, "offlineDeviceCount": 0, "latestVersion"? (the held
   catalogue holds a newer one), "source": "registry"}`; a file refused at start is not listed (its
@@ -1156,9 +1156,9 @@ same routes and from a room's page, with the same log, state and events.
   instances with their settings; a new version that does not load leaves the old one running (400
   with the reason); a write that fails gives the old one back (500); an old file that does not
   load again fails the recipe as a script that fails (500 with both reasons). An uninstall
-  deletes the recipe's instances, in every zone, with their settings and logs (as `DELETE
-  /recipe-instances/:id` does: `recipe.instance.removed` for each, `recipes.json` written by the
-  saver), drops the runtime and removes the file (a file that failed its checks too; 500 `Could not remove the recipe`), 404
+  keeps the recipe's instances, as Sowel's (stopped, enabled or not as they were, `Recipe not
+  found: <id>` in their log, still listed with their settings; an install of the same id starts
+  the enabled ones again, as at start), drops the runtime and removes the file (a file that failed its checks too; 500 `Could not remove the recipe`), 404
   without a file, 409 `<id> is built in` for a `--recipe-script`.
 - **At start** the files of `scripts/` are read in the order of their ids (a lone `<id>.srs.new`
   left by a power cut is promoted, a `.tmp` ignored) and go through the same checks; the enabled
@@ -1447,10 +1447,10 @@ copy embedded in the radio image at build time.
   figure is `null`). French and English.
   The **Plugins** page (`#/plugins`, Administration, after Discovery; Sowel's page cut to script
   recipes, with no category filter): two tabs with their counts, **Installed** (each installed
-  recipe of `GET /api/v1/plugins` with its name and version, Update when it names a `latestVersion`, Remove, whose
-  second click says how many instances go with it: "Confirm? 2 instances will be deleted"; the
+  recipe of `GET /api/v1/plugins` with its name and version, Update when it names a `latestVersion`, Remove (two
+  clicks: "Confirm?"; the recipe's instances stay, stopped, as Sowel's uninstall keeps them; no Remove for a recipe of the host's own `--recipe-script`, read from the resources' `builtIn` rows; the
   files refused at start with their reason, read from the resources, with Remove) and **Store**
-  (`GET /api/v1/plugins/store`, with Install by the entry's `repo`; the refusal of a file of that id
+  (`GET /api/v1/plugins/store`, with Install by the entry's `repo`, disabled with the entry's `compatReason` when it is `compatible: false`; the refusal of a file of that id
   when there is one; the error of the last read, from the resources), a search field over the id, name and description of the tab shown; it offers no upload of a signed
   file (that stays the API's route, `POST /api/v1/plugins/install`, for the developer). It asks the refresh when it
   opens and shows the list held when that answers 429; the server's own words show for a refusal.

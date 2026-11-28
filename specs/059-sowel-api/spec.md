@@ -95,7 +95,7 @@ box) cannot install a recipe on the box today.
 - As `POST /recipes/:id/update` and `/uninstall` were (D78: the catalogue's newer version; the
   file removed, the instances kept), at Sowel's paths. The update's body is optional (`{confirmed?,
   expectedSha256?}`, ignored). Answer `{"success": true}`. Solite's statuses stay (404 unknown, 409
-  while another job runs, 400 nothing newer), a difference of value beside Sowel's 500.
+  while another job runs, 409 nothing newer), a difference of value beside Sowel's 500.
 - The safe mode's exception for the removal (D58: the way out of a script that breaks the engine)
   moves to the new path.
 
