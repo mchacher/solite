@@ -1,7 +1,7 @@
 [package]
 name = "solite-firmware"
 description = "Solite on the ESP32 of the Sonoff Dongle Max: the core with the real adapters, on ESP-IDF."
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 license = "AGPL-3.0-only"
 repository = "https://github.com/mchacher/solite"
