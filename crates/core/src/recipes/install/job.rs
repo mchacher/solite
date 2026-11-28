@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use super::catalogue::{self, Entry, MAX_CATALOGUE_BYTES};
 use super::{Op, RecipeTicket, file};
-use crate::api::{Response, failure, json, no_content};
+use crate::api::{Response, failure, json};
 use crate::backup::Pacing;
 use crate::devices::lock;
 use crate::engine::{Storage, script_file};
@@ -16,7 +16,6 @@ use crate::failure::{Failure, Outcome};
 use crate::home::Home;
 use crate::recipes::ScriptClock;
 use crate::recipes::script::{ScriptRecipe, ScriptRuntimes, ScriptSummary};
-use crate::update::Version;
 use crate::update::release::{Fetcher, FileError, Limits, download_file, fetch_text};
 
 /// Where the steps on the engine run: a script may only run on a thread whose stack holds the
@@ -109,16 +108,9 @@ fn hop<R>(env: &JobEnv<'_>, job: impl FnOnce() -> R) -> Outcome<R> {
     out.ok_or_else(|| Failure::new(500, "Internal error"))
 }
 
-/// The recipe's definition with its `version`, the answer of an install or an update. `version`
-/// sorts after every other key of the definition, so it goes last, written into the text.
-fn recipe_answer(info: Option<String>, version: Version) -> Box<serde_json::value::RawValue> {
-    let mut text = info.unwrap_or_else(|| "null".to_string());
-    if text.ends_with('}') {
-        text.pop();
-        text.push_str(&format!(",\"version\":\"{version}\"}}"));
-    }
-    serde_json::value::RawValue::from_string(text)
-        .unwrap_or_else(|_| serde_json::value::RawValue::NULL.to_owned())
+/// Sowel's answer of an install, an update or an uninstall of a recipe: `{"success": true}`.
+fn success() -> Response {
+    json(200, &serde_json::json!({ "success": true }))
 }
 
 /// The figures of the storage, read by the thread that wrote and kept (R5.2).
@@ -129,9 +121,8 @@ fn note_storage(home: &Mutex<Home>, env: &JobEnv<'_>) {
 }
 
 impl RecipeTicket {
-    /// Runs the job and answers: the refresh with the store (R2.3), an install with 201 and the
-    /// recipe, an update with 200 and the recipe, an uninstall with 204, or the failure's status
-    /// and reason. The home's lock is not held while it runs; the one-job mark is held, and ends
+    /// Runs the job and answers: the refresh with `{count, source}` (R3), an install, an update
+    /// or an uninstall with `{"success": true}` (R4, R5), or the failure's status and reason. The home's lock is not held while it runs; the one-job mark is held, and ends
     /// when the ticket is dropped at the end of this call.
     pub fn run(self, home: &Mutex<Home>, env: &mut JobEnv<'_>) -> Response {
         match self.run_job(home, env) {
@@ -143,7 +134,16 @@ impl RecipeTicket {
     fn run_job(&self, home: &Mutex<Home>, env: &mut JobEnv<'_>) -> Outcome<Response> {
         match &self.op {
             Op::Refresh => self.refresh(home, env),
-            Op::Install { id } => {
+            Op::Install { repo } => {
+                let id = self.id_of_repo(home, env, repo)?;
+                let id = id.as_str();
+                {
+                    let held = lock(home);
+                    if held.installed_version(id).is_some() {
+                        return Err(Failure::new(409, "Recipe already installed"));
+                    }
+                    held.check_install_id(id)?;
+                }
                 let (_, bytes, signed) = self.entry_file(home, env, id)?;
                 self.install(home, env, id, signed, &bytes)
             }
@@ -217,11 +217,36 @@ impl RecipeTicket {
         }
     }
 
-    /// `POST /recipes/store/refresh` (R2.4; the 429 is the ticket's): the catalogue is
-    /// read and the store answered; a read that fails keeps the list and answers it with `error`.
+    /// `POST /plugins/store/refresh` (R3; the 429 is the ticket's): the catalogue is read and
+    /// Sowel's `{count, source}` answered; a read that fails keeps the list, answers `local` and
+    /// leaves its reason in the log and in `GET /system/resources`.
     fn refresh(&self, home: &Mutex<Home>, env: &mut JobEnv<'_>) -> Outcome<Response> {
-        let _ = self.read_catalogue(home, env);
-        Ok(json(200, &lock(home).recipe_store()))
+        let source = if self.read_catalogue(home, env).is_ok() {
+            "remote"
+        } else {
+            "local"
+        };
+        let count = lock(home).catalogue_count();
+        Ok(json(
+            200,
+            &serde_json::json!({ "count": count, "source": source }),
+        ))
+    }
+
+    /// The id of the catalogue's entry of a `repo`, the catalogue read first when none is held
+    /// (502 when it cannot be); 404 `Plugin not found` when it lists no such repository.
+    fn id_of_repo(&self, home: &Mutex<Home>, env: &mut JobEnv<'_>, repo: &str) -> Outcome<String> {
+        let held = lock(home).catalogue_held();
+        if !held && let Err(reason) = self.read_catalogue(home, env) {
+            return Err(Failure::new(
+                502,
+                format!("Recipe catalogue unreachable: {reason}"),
+            ));
+        }
+        lock(home)
+            .catalogue_entry_of_repo(repo)
+            .map(|entry| entry.id)
+            .ok_or_else(|| Failure::new(404, "Plugin not found"))
     }
 
     /// The catalogue's entry of an id, the catalogue read first when none is held (502 when it
@@ -325,8 +350,8 @@ impl RecipeTicket {
             return Err(Failure::new(500, "Could not save the recipe"));
         }
         note_storage(home, env);
-        let info = hop(env, || lock(home).install_commit(id, wall))?;
-        Ok(json(201, &recipe_answer(info, signed.version)))
+        hop(env, || lock(home).install_commit(id, wall))?;
+        Ok(success())
     }
 
     /// Replaces an installed recipe by a newer file (R3.5).
@@ -364,8 +389,8 @@ impl RecipeTicket {
             });
         }
         note_storage(home, env);
-        let info = hop(env, || lock(home).update_commit(id, wall))?;
-        Ok(json(200, &recipe_answer(info, signed.version)))
+        hop(env, || lock(home).update_commit(id, wall))?;
+        Ok(success())
     }
 
     /// A signed file as the body (R3.2): the file is checked, its id read; a recipe not installed
@@ -410,7 +435,7 @@ impl RecipeTicket {
         match removed {
             Ok(()) => {
                 note_storage(home, env);
-                Ok(no_content())
+                Ok(success())
             }
             Err(reason) => {
                 log::error!("recipes: {id}: {reason}");

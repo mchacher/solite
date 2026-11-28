@@ -662,26 +662,28 @@ impl World {
     fn install_id(&mut self, id: &str) -> (u16, Value) {
         self.call(
             "POST",
-            "/api/v1/recipes/install",
+            "/api/v1/plugins/install",
             Some(JSON),
-            json!({ "id": id }).to_string().as_bytes(),
+            json!({ "repo": format!("solite-recipes/{id}") })
+                .to_string()
+                .as_bytes(),
         )
     }
 
     fn upload(&mut self, bytes: &[u8]) -> (u16, Value) {
-        self.call("POST", "/api/v1/recipes/install", Some(OCTET), bytes)
+        self.call("POST", "/api/v1/plugins/install", Some(OCTET), bytes)
     }
 
     fn update(&mut self, id: &str) -> (u16, Value) {
-        self.post(&format!("/api/v1/recipes/{id}/update"))
+        self.post(&format!("/api/v1/plugins/{id}/update"))
     }
 
     fn uninstall(&mut self, id: &str) -> (u16, Value) {
-        self.post(&format!("/api/v1/recipes/{id}/uninstall"))
+        self.post(&format!("/api/v1/plugins/{id}/uninstall"))
     }
 
     fn refresh(&mut self) -> (u16, Value) {
-        self.post("/api/v1/recipes/store/refresh")
+        self.post("/api/v1/plugins/store/refresh")
     }
 
     /// Serves the catalogue and the files of these recipes: `(id, version, signed file)`.
@@ -706,7 +708,7 @@ impl World {
         self.clock.set(self.clock.get() + 61 * SECOND);
         let (status, body) = self.refresh();
         assert_eq!(status, 200, "{body}");
-        assert_eq!(body["error"], Value::Null, "{body}");
+        assert_eq!(body["source"], "remote", "{body}");
     }
 
     /// Installs a recipe from the catalogue, and checks that it went through.
@@ -714,7 +716,7 @@ impl World {
         let bytes = signed(&self.signing, id, version);
         self.serve(&[(id, version, &bytes)]);
         let (status, body) = self.install_id(id);
-        assert_eq!(status, 201, "{body}");
+        assert_eq!((status, &body["success"]), (200, &json!(true)), "{body}");
     }
 
     /// Creates an instance of a recipe in the root zone; its id.
@@ -910,7 +912,7 @@ fn a_signed_file_of_a_32_kb_script_of_real_code_uploads_and_loads() {
     let file = signed_with(&signing, version, source);
     assert!(file.len() <= MAX_FILE_BYTES);
     let answer = world.upload(&file);
-    assert_eq!(answer.0, 201, "{}", answer.1);
+    assert_eq!(answer.0, 200, "{}", answer.1);
     assert_eq!(world.version_of("big-recipe"), Some(version.to_string()));
 }
 
@@ -919,7 +921,7 @@ fn a_fourth_installed_runtime_is_409_when_the_psram_is_under_its_limit_and_the_r
     let mut world = World::new();
     let signing = world.signing.clone();
     for id in ["a", "b", "c"] {
-        assert_eq!(world.upload(&signed(&signing, id, "1.0.0")).0, 201, "{id}");
+        assert_eq!(world.upload(&signed(&signing, id, "1.0.0")).0, 200, "{id}");
     }
     // Three runtimes loaded, the PSRAM short of a fourth runtime's limit and the reserve.
     let needed = SYSTEM_MEMORY_LIMIT + SCRIPT_PSRAM_RESERVE;
@@ -930,7 +932,7 @@ fn a_fourth_installed_runtime_is_409_when_the_psram_is_under_its_limit_and_the_r
     assert_eq!(world.version_of("d"), None);
     // With the room, the fourth is admitted.
     world.probe.set(64 * 1024, needed);
-    assert_eq!(world.upload(&signed(&signing, "d", "1.0.0")).0, 201);
+    assert_eq!(world.upload(&signed(&signing, "d", "1.0.0")).0, 200);
 }
 
 #[test]
@@ -988,7 +990,7 @@ fn an_id_of_33_characters_or_with_a_slash_is_refused() {
     );
     // 32 characters pass.
     let bytes = signed(&signing, &"a".repeat(32), "1.0.0");
-    assert_eq!(world.upload(&bytes).0, 201);
+    assert_eq!(world.upload(&bytes).0, 200);
 }
 
 #[test]
@@ -1057,34 +1059,88 @@ fn a_key_of_small_order_or_of_63_characters_is_refused_at_start_and_installs_ans
 #[test]
 fn the_store_before_any_read_is_empty() {
     let mut world = World::new();
-    let (status, body) = world.get("/api/v1/recipes/store");
-    assert_eq!(status, 200);
+    let (status, body) = world.get("/api/v1/plugins/store");
+    assert_eq!((status, body), (200, json!([])));
+    let (status, body) = world.get("/api/v1/plugins");
+    assert_eq!((status, body), (200, json!([])));
+    let (_, resources) = world.get("/api/v1/system/resources");
     assert_eq!(
-        body,
-        json!({ "recipes": [], "readAt": null, "error": null })
+        resources["catalogue"],
+        json!({ "readAt": null, "error": null })
     );
 }
 
 #[test]
-fn a_valid_catalogue_is_kept_and_served_with_what_is_installed() {
+fn a_valid_catalogue_is_kept_and_served_as_sowels_store_entries() {
     let mut world = World::new();
     let signing = world.signing.clone();
     let a = signed(&signing, "a", "1.0.0");
-    world.serve(&[("a", "1.0.0", &a)]);
+    let b = signed(&signing, "b", "1.0.0");
+    let mut with = entry("a", "1.0.0", &a, &file_url("a", "1.0.0"));
+    with["repo"] = json!("someone/sowel-recipe-a");
+    with["category"] = json!("lighting");
+    with["author"] = json!("Someone");
+    with["tags"] = json!(["light", "motion"]);
+    with["icon"] = json!("Lightbulb");
+    let plain = entry("b", "1.0.0", &b, &file_url("b", "1.0.0"));
+    world.fetch.serve(
+        DEFAULT_CATALOGUE_URL,
+        Answer::Body(catalogue_of(&[with, plain])),
+    );
     let (status, body) = world.refresh();
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(body["error"], Value::Null);
-    assert_eq!(body["readAt"], "2026-11-21T09:12:03.120Z");
-    let first = &body["recipes"][0];
+    assert_eq!(
+        (status, &body),
+        (200, &json!({ "count": 2, "source": "remote" }))
+    );
+    let (status, store) = world.get("/api/v1/plugins/store");
+    assert_eq!(status, 200);
+    let first = &store[0];
     assert_eq!(first["id"], "a");
     assert_eq!(first["version"], "1.0.0");
-    assert_eq!(first["installed"], Value::Null);
-    assert_eq!(first["refused"], Value::Null);
-    assert_eq!(first["builtIn"], false);
-    // The GET answers the same, from what is held.
-    let (status, again) = world.get("/api/v1/recipes/store");
-    assert_eq!((status, &again), (200, &body));
+    assert_eq!(first["repo"], "someone/sowel-recipe-a");
+    assert_eq!(first["type"], "recipe");
+    assert_eq!(first["category"], "lighting");
+    assert_eq!(first["author"], "Someone");
+    assert_eq!(first["tags"], json!(["light", "motion"]));
+    assert_eq!(first["icon"], "Lightbulb");
+    assert_eq!(first["compatible"], true);
+    assert_eq!(first["isOfficial"], true);
+    assert_eq!(first["tier"], "official");
+    for gone in [
+        "installed",
+        "refused",
+        "builtIn",
+        "url",
+        "sha256",
+        "size",
+        "compatReason",
+    ] {
+        assert!(first.get(gone).is_none(), "{gone}: {first}");
+    }
+    // A 0.3 entry: the repo is derived, nothing else is added.
+    assert_eq!(store[1]["repo"], "solite-recipes/b");
+    assert!(store[1].get("tags").is_none());
+    // The read date is in the resources.
+    let (_, resources) = world.get("/api/v1/system/resources");
+    assert_eq!(resources["catalogue"]["readAt"], "2026-11-21T09:12:03.120Z");
+    assert_eq!(resources["catalogue"]["error"], Value::Null);
     assert_eq!(world.fetch.log, vec![DEFAULT_CATALOGUE_URL.to_string()]);
+}
+
+#[test]
+fn an_entry_that_needs_a_newer_solite_is_listed_as_not_compatible() {
+    let mut world = World::new();
+    let signing = world.signing.clone();
+    let a = signed(&signing, "a", "1.0.0");
+    let mut with = entry("a", "1.0.0", &a, &file_url("a", "1.0.0"));
+    with["minVersion"] = json!("99.0.0");
+    world
+        .fetch
+        .serve(DEFAULT_CATALOGUE_URL, Answer::Body(catalogue_of(&[with])));
+    world.refresh();
+    let (_, store) = world.get("/api/v1/plugins/store");
+    assert_eq!(store[0]["compatible"], false);
+    assert_eq!(store[0]["compatReason"], "Requires Solite >= 99.0.0");
 }
 
 #[test]
@@ -1108,10 +1164,9 @@ fn the_store_serves_the_i18n_of_a_sowel_catalogue_whole_with_groups_and_options(
         .serve(DEFAULT_CATALOGUE_URL, Answer::Body(catalogue_of(&[with])));
     let (status, body) = world.refresh();
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["error"], Value::Null, "{body}");
-    assert_eq!(body["recipes"][0]["i18n"], i18n);
-    let (_, again) = world.get("/api/v1/recipes/store");
-    assert_eq!(again["recipes"][0]["i18n"], i18n);
+    assert_eq!(body["source"], "remote", "{body}");
+    let (_, store) = world.get("/api/v1/plugins/store");
+    assert_eq!(store[0]["i18n"], i18n);
 }
 
 #[test]
@@ -1129,13 +1184,28 @@ fn an_i18n_that_is_not_an_object_refuses_the_catalogue_and_keeps_the_last_list()
         .fetch
         .serve(DEFAULT_CATALOGUE_URL, Answer::Body(catalogue_of(&[bad])));
     let (status, answer) = world.refresh();
-    assert_eq!(status, 200, "{answer}");
-    assert_eq!(answer["error"], "Invalid catalogue: a: i18n");
-    assert_eq!(answer["recipes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        (status, &answer),
+        (200, &json!({ "count": 1, "source": "local" }))
+    );
+    let (_, resources) = world.get("/api/v1/system/resources");
+    assert_eq!(
+        resources["catalogue"]["error"],
+        "Invalid catalogue: a: i18n"
+    );
+    assert_eq!(
+        world
+            .get("/api/v1/plugins/store")
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
-fn the_store_marks_an_installed_recipe_a_refused_file_and_the_id_of_a_script_the_program_carries() {
+fn installed_recipes_leave_the_store_for_get_plugins_and_a_refused_file_is_in_the_resources() {
     let mut world = World::new();
     let signing = world.signing.clone();
     let a = signed(&signing, "a", "1.0.0");
@@ -1157,25 +1227,132 @@ fn the_store_marks_an_installed_recipe_a_refused_file_and_the_id_of_a_script_the
         ("b", "1.0.0", &b),
         ("motion-light", "1.0.0", &native),
     ]);
-    assert_eq!(world.install_id("a").0, 201);
-    let (_, body) = world.refresh();
+    assert_eq!(world.install_id("a").0, 200);
+    world.refresh();
+    let (_, store) = world.get("/api/v1/plugins/store");
+    let ids: Vec<&str> = store
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    // `a` is installed and `motion-light` is built in: both are in GET /plugins, not here.
+    assert_eq!(ids, ["b"]);
+    let (_, installed) = world.get("/api/v1/plugins");
     let by_id = |id: &str| {
-        body["recipes"]
+        installed
             .as_array()
             .unwrap()
             .iter()
-            .find(|e| e["id"] == id)
-            .unwrap()
-            .clone()
+            .find(|e| e["manifest"]["id"] == id)
+            .cloned()
     };
-    assert_eq!(by_id("a")["installed"], "1.0.0");
-    assert_eq!(by_id("b")["installed"], Value::Null);
+    let a = by_id("a").unwrap();
+    assert_eq!(a["manifest"]["version"], "1.0.0");
+    assert_eq!(a["manifest"]["type"], "recipe");
+    assert_eq!(a["manifest"]["repo"], "solite-recipes/a");
+    assert_eq!(a["enabled"], true);
+    assert_eq!(a["status"], "connected");
+    assert_eq!(a["deviceCount"], 0);
+    assert_eq!(a["offlineDeviceCount"], 0);
+    assert_eq!(a["source"], "registry");
+    assert!(a["installedAt"].is_string(), "{a}");
+    assert!(a.get("latestVersion").is_none());
+    assert!(by_id("motion-light").is_some());
+    // `b` is refused: not listed, its reason is in the resources.
+    assert!(by_id("b").is_none());
+    let (_, resources) = world.get("/api/v1/system/resources");
+    let refused = resources["scripts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "b")
+        .unwrap();
+    assert_eq!(refused["reason"], "Recipe SHA-256 differs from the header");
+}
+
+#[test]
+fn get_plugins_names_the_newer_version_the_catalogue_holds() {
+    let mut world = World::new();
+    world.installed("a", "1.0.0");
+    let signing = world.signing.clone();
+    let a2 = signed(&signing, "a", "1.1.0");
+    world.publish(&[("a", "1.1.0", &a2)]);
+    let (_, installed) = world.get("/api/v1/plugins");
+    assert_eq!(installed[0]["manifest"]["version"], "1.0.0");
+    assert_eq!(installed[0]["latestVersion"], "1.1.0");
+    assert_eq!(world.get("/api/v1/plugins/store").1, json!([]));
+}
+
+#[test]
+fn an_install_moves_a_recipe_from_the_store_to_get_plugins_and_an_uninstall_moves_it_back() {
+    let mut world = World::new();
+    let signing = world.signing.clone();
+    let a = signed(&signing, "a", "1.0.0");
+    let b = signed(&signing, "b", "1.0.0");
+    world.serve(&[("a", "1.0.0", &a), ("b", "1.0.0", &b)]);
+    world.refresh();
     assert_eq!(
-        by_id("b")["refused"],
-        "Recipe SHA-256 differs from the header"
+        world
+            .get("/api/v1/plugins/store")
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
     );
-    assert_eq!(by_id("motion-light")["builtIn"], true);
-    assert_eq!(by_id("a")["builtIn"], false);
+    assert_eq!(world.get("/api/v1/plugins").1, json!([]));
+    assert_eq!(world.install_id("a"), (200, json!({ "success": true })));
+    let (_, store) = world.get("/api/v1/plugins/store");
+    assert_eq!(store.as_array().unwrap().len(), 1);
+    assert_eq!(store[0]["id"], "b");
+    assert_eq!(world.get("/api/v1/plugins").1[0]["manifest"]["id"], "a");
+    assert_eq!(world.uninstall("a"), (200, json!({ "success": true })));
+    assert_eq!(
+        world
+            .get("/api/v1/plugins/store")
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(world.get("/api/v1/plugins").1, json!([]));
+}
+
+#[test]
+fn the_old_recipe_store_routes_are_unknown_routes() {
+    let mut world = World::new();
+    world.installed("a", "1.0.0");
+    assert_eq!(
+        world.get("/api/v1/recipes/store"),
+        (404, json!({ "error": "Recipe not found" }))
+    );
+    assert_eq!(
+        world
+            .call("POST", "/api/v1/recipes/store/refresh", Some(JSON), b"{}")
+            .0,
+        404
+    );
+    assert_eq!(
+        world
+            .call("POST", "/api/v1/recipes/install", Some(JSON), b"{}")
+            .0,
+        405
+    );
+    assert_eq!(
+        world
+            .call("POST", "/api/v1/recipes/a/update", Some(JSON), b"{}")
+            .0,
+        404
+    );
+    assert_eq!(
+        world
+            .call("POST", "/api/v1/recipes/a/uninstall", Some(JSON), b"{}")
+            .0,
+        404
+    );
+    assert_eq!(world.version_of("a").as_deref(), Some("1.0.0"));
 }
 
 #[test]
@@ -1214,8 +1391,22 @@ fn a_catalogue_over_a_bound_is_refused_as_a_whole_and_the_last_good_list_is_kept
         world.fetch.serve(DEFAULT_CATALOGUE_URL, Answer::Body(body));
         let (status, answer) = world.refresh();
         assert_eq!(status, 200, "{name}: {answer}");
-        assert!(answer["error"].is_string(), "{name}: {answer}");
-        assert_eq!(answer["recipes"].as_array().unwrap().len(), 1, "{name}");
+        assert_eq!(answer, json!({ "count": 1, "source": "local" }), "{name}");
+        let (_, resources) = world.get("/api/v1/system/resources");
+        assert!(
+            resources["catalogue"]["error"].is_string(),
+            "{name}: {resources}"
+        );
+        assert_eq!(
+            world
+                .get("/api/v1/plugins/store")
+                .1
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "{name}"
+        );
     }
     // The bounds themselves: 32 entries and exactly 32 KB are kept.
     let at: Vec<Value> = (0..32)
@@ -1234,10 +1425,7 @@ fn two_refreshes_within_a_minute_are_200_then_429() {
     assert_eq!(again.0, 429, "{}", again.1);
     assert!(error_of(&again).starts_with("Please wait"));
     // The held list is still there.
-    assert_eq!(
-        world.get("/api/v1/recipes/store").1["recipes"][0]["id"],
-        "a"
-    );
+    assert_eq!(world.get("/api/v1/plugins/store").1[0]["id"], "a");
     world.clock.set(world.clock.get() + 61 * SECOND);
     assert_eq!(world.refresh().0, 200);
 }
@@ -1281,8 +1469,10 @@ fn a_refresh_with_the_network_down_answers_the_last_list_and_the_error() {
     );
     let (status, body) = world.refresh();
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["recipes"][0]["id"], "a");
-    assert_eq!(body["error"], "no route to host");
+    assert_eq!(body, json!({ "count": 1, "source": "local" }));
+    assert_eq!(world.get("/api/v1/plugins/store").1[0]["id"], "a");
+    let (_, resources) = world.get("/api/v1/system/resources");
+    assert_eq!(resources["catalogue"]["error"], "no route to host");
 }
 
 #[test]
@@ -1347,10 +1537,8 @@ fn a_recipe_installs_from_the_catalogue_with_one_write() {
     let a = signed(&world.signing.clone(), "a", "1.0.0");
     world.serve(&[("a", "1.0.0", &a)]);
     let (status, body) = world.install_id("a");
-    assert_eq!(status, 201, "{body}");
-    assert_eq!(body["id"], "a");
-    assert_eq!(body["version"], "1.0.0");
-    assert!(body["slots"].is_array());
+    assert_eq!((status, &body["success"]), (200, &json!(true)), "{body}");
+    assert_eq!(body, json!({ "success": true }));
     assert_eq!(world.file("a"), Some(a));
     assert_eq!(world.writes("a"), 1);
     assert_eq!(world.version_of("a"), Some("1.0.0".to_string()));
@@ -1368,11 +1556,7 @@ fn a_recipe_installs_from_an_upload_with_one_write() {
     let mut world = World::new();
     let a = signed(&world.signing.clone(), "a", "1.0.0");
     let (status, body) = world.upload(&a);
-    assert_eq!(status, 201, "{body}");
-    assert_eq!(
-        (body["id"].as_str(), body["version"].as_str()),
-        (Some("a"), Some("1.0.0"))
-    );
+    assert_eq!((status, body), (200, json!({ "success": true })));
     assert_eq!(world.file("a"), Some(a));
     assert_eq!(world.writes("a"), 1);
     assert!(world.fetch.log.is_empty(), "an upload touches no network");
@@ -1383,13 +1567,13 @@ fn an_install_before_any_catalogue_read_reads_it_first() {
     let mut world = World::new();
     let a = signed(&world.signing.clone(), "a", "1.0.0");
     world.serve(&[("a", "1.0.0", &a)]);
-    assert_eq!(world.install_id("a").0, 201);
+    assert_eq!(world.install_id("a").0, 200);
     assert_eq!(
         world.fetch.log,
         vec![DEFAULT_CATALOGUE_URL.to_string(), file_url("a", "1.0.0")]
     );
     assert_eq!(
-        world.get("/api/v1/recipes/store").1["recipes"][0]["installed"],
+        world.get("/api/v1/plugins").1[0]["manifest"]["version"],
         "1.0.0"
     );
 }
@@ -1496,7 +1680,7 @@ fn an_install_with_the_network_down_or_a_download_cut_for_good_is_502() {
         },
     );
     let (status, body) = world.install_id("a");
-    assert_eq!(status, 201, "{body}");
+    assert_eq!(status, 200, "{body}");
     assert_eq!(world.file("a"), Some(a.clone()));
     assert!(
         world.fetch.log.iter().any(|l| l.contains("from 150")),
@@ -1553,17 +1737,13 @@ fn an_install_is_refused_for_a_script_the_program_carries_an_installed_or_unknow
     ]);
     refused(world.install_id("local"), 409, "local is built in");
     // The catalogue does not list it.
-    refused(
-        world.install_id("nothing"),
-        404,
-        "Recipe not in the catalogue: nothing",
-    );
+    refused(world.install_id("nothing"), 404, "Plugin not found");
     // The id of a loaded file.
-    assert_eq!(world.install_id("a").0, 201);
-    refused(world.install_id("a"), 409, "a is installed: update it");
+    assert_eq!(world.install_id("a").0, 200);
+    refused(world.install_id("a"), 409, "Recipe already installed");
     // A script given by `--recipe-script` and three files make four: a fifth is refused.
-    assert_eq!(world.install_id("b").0, 201);
-    assert_eq!(world.install_id("c").0, 201);
+    assert_eq!(world.install_id("b").0, 200);
+    assert_eq!(world.install_id("c").0, 200);
     refused(
         world.install_id("d"),
         409,
@@ -1584,7 +1764,7 @@ fn an_install_is_refused_for_a_script_the_program_carries_an_installed_or_unknow
         .collect();
     world.serve(&entries);
     for id in ["a", "b", "c", "d"] {
-        assert_eq!(world.install_id(id).0, 201, "{id}");
+        assert_eq!(world.install_id(id).0, 200, "{id}");
     }
     refused(
         world.install_id("e"),
@@ -1630,7 +1810,7 @@ fn an_install_after_an_uninstall_finds_no_instance_to_start() {
     );
     assert!(world.running(&one) && !world.running(&two));
     // An uninstall deletes them (R3.6): a new install starts none.
-    assert_eq!(world.uninstall("a").0, 204);
+    assert_eq!(world.uninstall("a").0, 200);
     assert!(!world.running(&one));
     world.installed("a", "1.0.0");
     assert!(
@@ -1675,8 +1855,7 @@ fn the_real_motion_light_installed_by_an_upload_starts_the_three_instances_a_nat
     }
     let file = signed_with(&world.signing.clone(), "1.1.2", MOTION_LIGHT);
     let (status, body) = world.upload(&file);
-    assert_eq!(status, 201, "{body}");
-    assert_eq!(body["id"], "motion-light");
+    assert_eq!((status, &body["success"]), (200, &json!(true)), "{body}");
     for id in ids {
         assert!(world.running(id), "{id}: {:?}", world.messages(id));
     }
@@ -1756,7 +1935,7 @@ fn a_write_that_fails_unloads_the_recipe_again_and_answers_500() {
     assert_eq!(world.file("a"), None);
     // Nothing is left half done: the next install goes through.
     world.storage.fail_byte_writes.set(false);
-    assert_eq!(world.install_id("a").0, 201);
+    assert_eq!(world.install_id("a").0, 200);
 }
 
 // ---- Update (R3.5) ----
@@ -1777,7 +1956,7 @@ fn a_newer_version_that_loads_replaces_the_file_and_restarts_the_instances_with_
     world.clock.set(world.clock.get() + 61 * SECOND);
     let (status, body) = world.update("a");
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["version"], "1.0.1");
+    assert_eq!(body, json!({ "success": true }));
     assert_eq!(world.version_of("a"), Some("1.0.1".to_string()));
     assert_eq!(world.file("a"), Some(newer));
     assert_eq!(world.writes("a"), 2);
@@ -1914,7 +2093,7 @@ fn an_uninstall_deletes_the_instances_in_every_zone_drops_the_runtime_and_remove
         signed(&world.signing.clone(), "b", "1.0.0"),
     );
     world.serve(&[("a", "1.0.0", &a), ("b", "1.0.0", &b)]);
-    assert_eq!(world.install_id("a").0, 201);
+    assert_eq!(world.install_id("a").0, 200);
     let one = world.instance("a");
     let (status, zone) = world.call(
         "POST",
@@ -1934,7 +2113,7 @@ fn an_uninstall_deletes_the_instances_in_every_zone_drops_the_runtime_and_remove
     assert_eq!(status, 201, "{body}");
     let two = body["id"].as_str().unwrap().to_string();
     // Another recipe's instance stays.
-    assert_eq!(world.install_id("b").0, 201);
+    assert_eq!(world.install_id("b").0, 200);
     let other = world.instance("b");
     let (hub, client) = {
         let hub = world.lock().live();
@@ -1945,7 +2124,7 @@ fn an_uninstall_deletes_the_instances_in_every_zone_drops_the_runtime_and_remove
     };
     world.lock().take_recipes_cursor();
     let (status, body) = world.uninstall("a");
-    assert_eq!((status, body), (204, Value::Null));
+    assert_eq!((status, body), (200, json!({ "success": true })));
     assert!(!world.running(&one) && !world.running(&two));
     assert!(world.running(&other));
     assert_eq!(world.file("a"), None);
@@ -2009,7 +2188,7 @@ fn an_uninstall_removes_a_refused_file_too() {
     world.boot();
     assert_eq!(world.lock().resources().scripts[0].state, "refused");
     assert_eq!(world.lock().recipes().instances().count(), 1);
-    assert_eq!(world.uninstall("bad").0, 204);
+    assert_eq!(world.uninstall("bad").0, 200);
     // The instance the refused file left goes with it.
     assert_eq!(world.lock().recipes().instances().count(), 0);
     assert!(world.lock().recipes_changed());
@@ -2210,7 +2389,7 @@ fn an_install_or_an_upload_over_a_refused_file_replaces_it() {
     world.boot();
     assert_eq!(world.lock().resources().scripts[0].state, "refused");
     let (status, body) = world.upload(&good);
-    assert_eq!(status, 201, "{body}");
+    assert_eq!(status, 200, "{body}");
     assert_eq!(world.storage.file("scripts/a.srs"), Some(good));
     let rows = world.lock().resources().scripts;
     assert_eq!(rows.len(), 1);
@@ -2295,10 +2474,10 @@ fn in_the_safe_mode_the_uninstall_goes_through_and_install_update_and_refresh_ar
         refused(answer, 503, "Safe mode: the engine is stopped");
     }
     // The GETs answer.
-    assert_eq!(world.get("/api/v1/recipes/store").0, 200);
+    assert_eq!(world.get("/api/v1/plugins/store").0, 200);
     assert_eq!(world.get("/api/v1/system/resources").0, 200);
     // The uninstall removes the refused file and the recipe's instance.
-    assert_eq!(world.uninstall("a").0, 204);
+    assert_eq!(world.uninstall("a").0, 200);
     assert!(world.storage.file("scripts/a.srs").is_none());
     assert_eq!(world.lock().recipes().instances().count(), 0);
     assert!(world.lock().recipes_changed());
@@ -2361,16 +2540,16 @@ fn a_minute_later(world: &World) {
 fn held_job(world: &World) -> Reply {
     let reply = world.ask(
         "POST",
-        "/api/v1/recipes/install",
+        "/api/v1/plugins/install",
         Some(JSON),
-        br#"{"id":"x"}"#,
+        br#"{"repo":"o/x"}"#,
     );
     assert!(matches!(reply, Reply::RecipeJob(_)), "{reply:?}");
     reply
 }
 
 fn held_refresh(world: &World) -> Reply {
-    let reply = world.ask("POST", "/api/v1/recipes/store/refresh", None, b"");
+    let reply = world.ask("POST", "/api/v1/plugins/store/refresh", None, b"");
     assert!(matches!(reply, Reply::CatalogueRefresh(_)), "{reply:?}");
     reply
 }
@@ -2427,9 +2606,9 @@ fn a_recipe_job_is_refused_while_another_job_or_a_check_or_a_pull_runs() {
     // Idle again: the job is admitted (and goes on to the catalogue).
     let reply = world.ask(
         "POST",
-        "/api/v1/recipes/install",
+        "/api/v1/plugins/install",
         Some(JSON),
-        br#"{"id":"y"}"#,
+        br#"{"repo":"solite-recipes/y"}"#,
     );
     assert!(matches!(reply, Reply::RecipeJob(_)));
 }
@@ -2606,12 +2785,12 @@ fn a_backup_a_restore_a_restart_and_a_factory_reset_are_refused_during_a_recipe_
     let mut world = World::new();
     let job = held_job(&world);
     refused(
-        world.get("/api/v1/system/backup"),
+        world.get("/api/v1/backup"),
         409,
         "Backup already in progress",
     );
     refused(
-        whole(world.ask("POST", "/api/v1/system/backup", Some(OCTET), b"")),
+        whole(world.ask("POST", "/api/v1/backup", Some(OCTET), b"")),
         409,
         "Backup already in progress",
     );
@@ -2634,7 +2813,7 @@ fn a_backup_a_restore_a_restart_and_a_factory_reset_are_refused_during_a_recipe_
     );
     // A refresh does not refuse a backup, a restore or a factory reset.
     assert!(matches!(
-        world.ask("GET", "/api/v1/system/backup", None, b""),
+        world.ask("GET", "/api/v1/backup", None, b""),
         Reply::BackupExport(_)
     ));
     drop(refresh);
@@ -2672,7 +2851,7 @@ fn an_install_that_would_take_the_psram_under_the_reserve_is_409_with_the_figure
     no_file_touched(&world);
     // Just over: admitted.
     world.probe.set(64 * 1024, needed);
-    assert_eq!(world.install_id("a").0, 201);
+    assert_eq!(world.install_id("a").0, 200);
     // The reserve is the same for an upload.
     let mut world = World::new();
     world.probe.set(64 * 1024, needed - 1);
@@ -2714,7 +2893,7 @@ fn an_uninstall_needs_only_its_threads_stack_of_internal_ram() {
     // removal goes through.
     world.probe.set(FETCH_STACK_BYTES, 1_500_000);
     assert_eq!(world.install_id("b").0, 503);
-    assert_eq!(world.uninstall("a").0, 204);
+    assert_eq!(world.uninstall("a").0, 200);
     world.probe.set(64 * 1024, 1_500_000);
     world.installed("a", "1.0.0");
     // Under the stack: refused, with the 20 KB figure.
@@ -2748,7 +2927,7 @@ fn with_the_job_thread_kept_an_install_needs_only_the_tls_margin() {
     assert!(world.fetch.log.is_empty());
     // 17 KB: far under the 36 KB of a thread made per job, and admitted.
     world.probe.set(17 * 1024, 1_500_000);
-    assert_eq!(world.install_id("a").0, 201);
+    assert_eq!(world.install_id("a").0, 200);
 }
 
 #[test]
@@ -2758,7 +2937,7 @@ fn with_the_job_thread_kept_an_uninstall_is_never_refused_for_internal_ram() {
     world.installed("a", "1.0.0");
     world.keep_job_thread();
     world.probe.set(1024, 1_500_000);
-    assert_eq!(world.uninstall("a").0, 204);
+    assert_eq!(world.uninstall("a").0, 200);
 }
 
 #[test]
@@ -2856,12 +3035,12 @@ fn an_upload_is_refused_for_a_fifth_file_before_any_load_or_memory_check() {
     let c = signed(&signing, "c", "1.0.0");
     let d = signed(&signing, "d", "1.0.0");
     let e = signed(&signing, "e", "1.0.0");
-    assert_eq!(world.upload(&b).0, 201);
+    assert_eq!(world.upload(&b).0, 200);
     // Each runtime held takes 200 KB of the PSRAM the probe reads: the rule is met each time.
     world.probe.set(64 * 1024, needed + 400 * 1024);
-    assert_eq!(world.upload(&c).0, 201);
+    assert_eq!(world.upload(&c).0, 200);
     world.probe.set(64 * 1024, needed + 600 * 1024);
-    assert_eq!(world.upload(&d).0, 201);
+    assert_eq!(world.upload(&d).0, 200);
     world.probe.set(64 * 1024, 1024);
     refused(
         world.upload(&e),
@@ -2943,7 +3122,7 @@ fn a_recipe_written_after_a_factory_reset_is_not_removed_by_the_saver_that_still
     world.relogin();
     let again = signed(&signing, "a", "1.0.0");
     let answer = world.upload(&again);
-    assert_eq!(answer.0, 201, "{answer:?}");
+    assert_eq!(answer.0, 200, "{answer:?}");
     let mut saver = Saver::new(&world.storage, T0);
     saver.tick(&world.home, T0 + 1, true).unwrap();
     assert!(world.file("a").is_some(), "the new file stays");
@@ -3017,10 +3196,10 @@ fn the_storage_figures_change_with_an_install_and_an_uninstall_and_the_get_reads
     let reads = world.storage.reads.get();
     for _ in 0..3 {
         assert_eq!(world.get("/api/v1/system/resources").0, 200);
-        assert_eq!(world.get("/api/v1/recipes/store").0, 200);
+        assert_eq!(world.get("/api/v1/plugins/store").0, 200);
     }
     assert_eq!(world.storage.reads.get(), reads);
-    assert_eq!(world.uninstall("a").0, 204);
+    assert_eq!(world.uninstall("a").0, 200);
     assert_eq!(
         world.get("/api/v1/system/resources").1["storage"]["used"],
         0
@@ -3033,9 +3212,9 @@ fn the_storage_figures_change_with_an_install_and_an_uninstall_and_the_get_reads
 fn the_recipe_routes_without_a_session_are_401() {
     let world = World::new();
     for (method, path) in [
-        ("GET", "/api/v1/recipes/store"),
-        ("POST", "/api/v1/recipes/store/refresh"),
-        ("POST", "/api/v1/recipes/install"),
+        ("GET", "/api/v1/plugins/store"),
+        ("POST", "/api/v1/plugins/store/refresh"),
+        ("POST", "/api/v1/plugins/install"),
         ("POST", "/api/v1/recipes/a/update"),
         ("POST", "/api/v1/recipes/a/uninstall"),
         ("GET", "/api/v1/system/resources"),
@@ -3051,40 +3230,40 @@ fn the_install_route_takes_json_or_an_octet_stream_and_refuses_another_type() {
     let mut world = World::new();
     let a = signed(&world.signing.clone(), "a", "1.0.0");
     world.serve(&[("a", "1.0.0", &a)]);
-    assert_eq!(world.install_id("a").0, 201);
+    assert_eq!(world.install_id("a").0, 200);
     let b = signed(&world.signing.clone(), "b", "1.0.0");
-    assert_eq!(world.upload(&b).0, 201);
+    assert_eq!(world.upload(&b).0, 200);
     refused(
-        world.call("POST", "/api/v1/recipes/install", Some("text/plain"), b"x"),
+        world.call("POST", "/api/v1/plugins/install", Some("text/plain"), b"x"),
         415,
         "Unsupported Media Type",
     );
     refused(
-        world.call("POST", "/api/v1/recipes/install", None, b"x"),
+        world.call("POST", "/api/v1/plugins/install", None, b"x"),
         415,
         "Unsupported Media Type",
     );
     refused(
-        world.call("POST", "/api/v1/recipes/install", Some(JSON), b"{}"),
+        world.call("POST", "/api/v1/plugins/install", Some(JSON), b"{}"),
         400,
-        "Invalid body",
+        "Invalid 'repo' field (expected owner/repo)",
     );
     refused(
-        world.call("POST", "/api/v1/recipes/install", Some(JSON), b"[1]"),
+        world.call("POST", "/api/v1/plugins/install", Some(JSON), b"[1]"),
         400,
-        "Invalid body",
+        "Invalid 'repo' field (expected owner/repo)",
     );
     for method in ["GET", "PUT", "DELETE"] {
         assert_eq!(
-            world.call(method, "/api/v1/recipes/install", None, b"").0,
+            world.call(method, "/api/v1/plugins/install", None, b"").0,
             405,
             "{method}"
         );
     }
     // `store` and `install` do not meet Sowel's `/recipes/:recipeId`.
     assert_eq!(world.get("/api/v1/recipes/a").0, 200);
-    assert_eq!(world.get("/api/v1/recipes/store").0, 200);
-    assert_eq!(world.get("/api/v1/recipes/install").0, 405);
+    assert_eq!(world.get("/api/v1/plugins/store").0, 200);
+    assert_eq!(world.get("/api/v1/plugins/install").0, 405);
 }
 
 #[test]
@@ -3093,7 +3272,7 @@ fn the_plain_handler_does_not_run_a_recipe_job() {
     let mut random = counter();
     let request = Request {
         method: "POST",
-        path: "/api/v1/recipes/install",
+        path: "/api/v1/plugins/install",
         host: Some(HOST),
         port: PORT,
         reach: Reach::Loopback,
@@ -3118,6 +3297,87 @@ fn the_flash_is_written_and_removed_only_outside_the_script_thread_steps() {
     world.publish(&[("a", "1.0.1", &newer)]);
     world.clock.set(world.clock.get() + 61 * SECOND);
     assert_eq!(world.update("a").0, 200);
-    assert_eq!(world.uninstall("a").0, 204);
+    assert_eq!(world.uninstall("a").0, 200);
     assert!(world.hops.count.get() >= 5);
+}
+
+#[test]
+fn an_install_by_repo_follows_sowels_answers_and_ignores_confirmed_and_the_digest() {
+    let mut world = World::new();
+    let signing = world.signing.clone();
+    let a = signed(&signing, "a", "1.0.0");
+    let mut with = entry("a", "1.0.0", &a, &file_url("a", "1.0.0"));
+    with["repo"] = json!("someone/sowel-recipe-a");
+    world
+        .fetch
+        .serve(DEFAULT_CATALOGUE_URL, Answer::Body(catalogue_of(&[with])));
+    world
+        .fetch
+        .serve(&file_url("a", "1.0.0"), Answer::Body(a.clone()));
+    let install = |world: &mut World, body: &str| {
+        world.call(
+            "POST",
+            "/api/v1/plugins/install",
+            Some(JSON),
+            body.as_bytes(),
+        )
+    };
+    refused(
+        install(&mut world, r#"{"repo":"someone/other"}"#),
+        404,
+        "Plugin not found",
+    );
+    for bad in [
+        r#"{"repo":"noslash"}"#,
+        "{}",
+        r#"{"repo":3}"#,
+        r#"{"id":"a"}"#,
+    ] {
+        refused(
+            install(&mut world, bad),
+            400,
+            "Invalid 'repo' field (expected owner/repo)",
+        );
+    }
+    // By the derived repo, the id's old way, nothing is found: the entry has its own.
+    refused(
+        install(&mut world, r#"{"repo":"solite-recipes/a"}"#),
+        404,
+        "Plugin not found",
+    );
+    assert_eq!(
+        install(
+            &mut world,
+            r#"{"repo":"someone/sowel-recipe-a","confirmed":true,"expectedSha256":"00"}"#
+        ),
+        (200, json!({ "success": true }))
+    );
+    assert_eq!(
+        world.get("/api/v1/plugins").1[0]["manifest"]["repo"],
+        "someone/sowel-recipe-a"
+    );
+    refused(
+        install(&mut world, r#"{"repo":"someone/sowel-recipe-a"}"#),
+        409,
+        "Recipe already installed",
+    );
+}
+
+#[test]
+fn an_update_takes_no_body_or_sowels_optional_one() {
+    let mut world = World::new();
+    world.installed("a", "1.0.0");
+    let signing = world.signing.clone();
+    let a2 = signed(&signing, "a", "1.1.0");
+    world.publish(&[("a", "1.1.0", &a2)]);
+    let reply = world.call(
+        "POST",
+        "/api/v1/plugins/a/update",
+        Some(JSON),
+        br#"{"confirmed":true}"#,
+    );
+    assert_eq!(reply, (200, json!({ "success": true })));
+    assert_eq!(world.version_of("a"), Some("1.1.0".to_string()));
+    refused(world.update("a"), 409, "a 1.1.0 is not newer than 1.1.0");
+    assert_eq!(world.update("nothing").0, 404);
 }

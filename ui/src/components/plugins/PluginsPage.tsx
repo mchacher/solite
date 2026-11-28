@@ -6,27 +6,30 @@
 // stays on the row, with Sowel's two-step confirmation, as there is no detail sheet). Kept:
 // the Installed and Store tabs with their counts, the search field, the row look (`card`), Install,
 // Update and Remove. Added: the files refused at start, the
-// error of the last read, and the server's own words for a refusal. The catalogue is Solite's
-// (`/recipes/*`), a 429 at opening leaves the list held.
+// error of the last read, and the server's own words for a refusal. The recipes are Sowel's
+// `/plugins` routes (spec 059): the installed ones, the catalogue's not installed ones, and the
+// catalogue's read date and error, a refusal at start and the files' rows from `/system/resources`;
+// a 429 at opening leaves the list held.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowUpCircle, Download, Loader2, Package, Search, SearchX, X } from "lucide-react";
 import {
-  getRecipeStore,
+  getPlugins,
+  getPluginStore,
   getRecipeInstances,
   getResources,
   installRecipe,
-  refreshRecipeStore,
+  refreshPluginStore,
   uninstallRecipe,
   updateRecipe,
-  type RecipeStore,
+  type PluginInfo,
+  type Resources,
   type ScriptResource,
   type StoreEntry,
 } from "../../api";
 import { ApiError } from "../../api/client";
 import { formErrorText } from "../../lib/form-error";
-import { compareVersions } from "../../lib/version";
-import { noteRecipeStore } from "../layout/useRecipeUpdates";
+import { noteRecipePlugins } from "../layout/useRecipeUpdates";
 import { BUTTON_SECONDARY } from "../ui/Modal";
 
 type Tab = "installed" | "store";
@@ -39,18 +42,46 @@ function serverText(err: unknown, t: Parameters<typeof formErrorText>[1]): strin
   return formErrorText(err, t);
 }
 
-const hasUpdate = (entry: StoreEntry) =>
-  entry.installed !== null && compareVersions(entry.version, entry.installed) > 0;
+/** What a row shows of a recipe, installed or not. */
+interface Row {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  /** The catalogue's newer version, set for an installed recipe that has one. */
+  latest?: string;
+  repo: string;
+}
 
-const matches = (entry: StoreEntry, query: string) =>
+const installedOf = (plugin: PluginInfo): Row => ({
+  id: plugin.manifest.id,
+  name: plugin.manifest.name,
+  description: plugin.manifest.description,
+  version: plugin.manifest.version,
+  latest: plugin.latestVersion,
+  repo: plugin.manifest.repo,
+});
+
+const storeOf = (entry: StoreEntry): Row => ({
+  id: entry.id,
+  name: entry.name,
+  description: entry.description,
+  version: entry.version,
+  repo: entry.repo,
+});
+
+const matches = (entry: Row, query: string) =>
   `${entry.id} ${entry.name} ${entry.description}`
     .toLowerCase()
     .includes(query.trim().toLowerCase());
 
 export function PluginsPage() {
   const { t } = useTranslation();
-  const [store, setStore] = useState<RecipeStore | null>(null);
-  /** The files of the data folder: the refused ones, and the installed ones the catalogue lacks. */
+  const [plugins, setPlugins] = useState<PluginInfo[] | null>(null);
+  const [store, setStore] = useState<StoreEntry[]>([]);
+  /** The catalogue's last read and why it failed (`GET /system/resources`). */
+  const [catalogue, setCatalogue] = useState<Resources["catalogue"] | null>(null);
+  /** The files refused at start (`GET /system/resources`). */
   const [files, setFiles] = useState<ScriptResource[]>([]);
   const [tab, setTab] = useState<Tab>("installed");
   const [query, setQuery] = useState("");
@@ -62,17 +93,23 @@ export function PluginsPage() {
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const alive = useRef(true);
 
-  const keep = useCallback((next: RecipeStore) => {
-    setStore(next);
-    noteRecipeStore(next);
+  /** The installed recipes and the store as the box holds them now. */
+  const readHeld = useCallback(async () => {
+    const [installed, entries] = await Promise.all([getPlugins(), getPluginStore()]);
+    if (!alive.current) return;
+    setPlugins(installed);
+    setStore(entries);
+    noteRecipePlugins(installed);
   }, []);
 
   const readFiles = useCallback(
     () =>
       getResources().then(
-        (r) =>
-          alive.current &&
-          setFiles(r.scripts.filter((s) => s.source === "installed" || s.state === "refused")),
+        (r) => {
+          if (!alive.current) return;
+          setFiles(r.scripts.filter((s) => s.state === "refused"));
+          setCatalogue(r.catalogue);
+        },
         () => undefined,
       ),
     [],
@@ -82,18 +119,23 @@ export function PluginsPage() {
     alive.current = true;
     let read = false;
     // What the box holds first, then the read: a 429 (within a minute of the last) keeps the list.
-    void getRecipeStore().then(
-      (held) => alive.current && keep(held),
+    void readHeld().then(
+      () => undefined,
       (err: unknown) =>
         alive.current && !read && setMessage({ text: serverText(err, t), error: true }),
     );
     void readFiles();
-    void refreshRecipeStore().then(
-      (fresh) => {
+    void refreshPluginStore().then(
+      async () => {
         if (!alive.current) return;
         read = true;
-        keep(fresh);
         setMessage(null);
+        try {
+          await readHeld();
+        } catch {
+          // The list stays as it was.
+        }
+        await readFiles();
       },
       (err: unknown) => {
         // A 429 (paced) keeps the held list silently; any other refusal says why.
@@ -122,8 +164,7 @@ export function PluginsPage() {
     }
     if (!alive.current) return;
     try {
-      const held = await getRecipeStore();
-      if (alive.current) keep(held);
+      await readHeld();
     } catch {
       // The list stays as it was.
     }
@@ -131,20 +172,15 @@ export function PluginsPage() {
     if (alive.current) setBusy(null);
   };
 
-  const recipes = store?.recipes ?? [];
-  const catalogueIds = new Set(recipes.map((r) => r.id));
+  const installedRows = (plugins ?? []).map(installedOf);
   const searching = query.trim().length > 0;
-  const installed = recipes.filter((r) => r.installed !== null && matches(r, query));
-  // Files the catalogue does not list (one from the API, or a file refused at start): by their id.
-  const others = files.filter(
-    (f) =>
-      (f.state === "refused" || !catalogueIds.has(f.id)) &&
-      `${f.id} ${f.reason ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()),
+  const installed = installedRows.filter((r) => matches(r, query));
+  // Files refused at start have no row of the installed list: by their id and their reason.
+  const others = files.filter((f) =>
+    `${f.id} ${f.reason ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()),
   );
-  const listed = recipes.filter((r) => matches(r, query));
-  const installedCount =
-    recipes.filter((r) => r.installed !== null).length +
-    files.filter((f) => f.state === "refused" || !catalogueIds.has(f.id)).length;
+  const listed = store.map(storeOf).filter((r) => matches(r, query));
+  const installedCount = installedRows.length + files.length;
 
   const removeButton = (id: string) => (
     <button
@@ -179,7 +215,7 @@ export function PluginsPage() {
     </button>
   );
 
-  const updateButton = (entry: StoreEntry) => (
+  const updateButton = (entry: Row) => (
     <button
       type="button"
       disabled={busy !== null}
@@ -197,7 +233,7 @@ export function PluginsPage() {
     </button>
   );
 
-  const identity = (entry: StoreEntry, detail: ReactNode) => (
+  const identity = (entry: Row, detail: ReactNode) => (
     <div className="flex items-center gap-3 min-w-0 flex-1 px-4 py-3">
       <div className="w-9 h-9 bg-border-light rounded-md flex items-center justify-center shrink-0">
         <Package size={18} className="text-text-secondary" />
@@ -206,7 +242,7 @@ export function PluginsPage() {
         <div className="flex items-center gap-2 min-w-0 flex-wrap">
           <span className="text-body font-semibold text-text truncate">{entry.name}</span>
           <span className="text-micro px-1.5 py-0.5 bg-border-light rounded-sm text-text-tertiary font-mono shrink-0">
-            {entry.installed ?? entry.version}
+            {entry.version}
           </span>
         </div>
         <p className="text-caption text-text-secondary mt-0.5 line-clamp-2 sm:line-clamp-1">
@@ -217,28 +253,21 @@ export function PluginsPage() {
     </div>
   );
 
-  const installedRow = (entry: StoreEntry) => (
+  const installedRow = (entry: Row) => (
     <div
       key={entry.id}
       data-testid={`recipe-${entry.id}`}
       className="card flex flex-wrap items-center"
     >
-      {identity(
-        entry,
-        entry.refused && (
-          <p className="text-micro text-error">
-            {t("recipeStore.refused", { reason: entry.refused })}
-          </p>
-        ),
-      )}
+      {identity(entry, null)}
       <div className="flex items-center justify-end gap-1 shrink-0 basis-full sm:basis-auto px-4 pb-3 sm:pb-0">
-        {hasUpdate(entry) && (
+        {entry.latest && (
           <span className="text-micro px-1.5 py-0.5 bg-error/10 rounded-sm text-error font-mono shrink-0 flex items-center gap-0.5">
             <ArrowUpCircle size={10} />
-            {entry.version}
+            {entry.latest}
           </span>
         )}
-        {hasUpdate(entry) && updateButton(entry)}
+        {entry.latest && updateButton(entry)}
         {removeButton(entry.id)}
       </div>
     </div>
@@ -274,52 +303,37 @@ export function PluginsPage() {
     </div>
   );
 
-  const storeRow = (entry: StoreEntry) => (
+  /** Why a file of that id was refused at start, if one was. */
+  const refusedOf = (id: string) => files.find((f) => f.id === id)?.reason ?? null;
+
+  const storeRow = (entry: Row) => (
     <div
       key={entry.id}
       data-testid={`recipe-${entry.id}`}
       className="card flex flex-wrap items-center"
     >
       {identity(
-        { ...entry, installed: null },
-        <>
-          {entry.builtIn && (
-            <p className="text-micro text-text-tertiary">{t("recipeStore.builtIn")}</p>
-          )}
-          {entry.refused && (
-            <p className="text-micro text-error">
-              {t("recipeStore.refused", { reason: entry.refused })}
-            </p>
-          )}
-        </>,
+        entry,
+        refusedOf(entry.id) && (
+          <p className="text-micro text-error">
+            {t("recipeStore.refused", { reason: refusedOf(entry.id) ?? "" })}
+          </p>
+        ),
       )}
       <div className="flex items-center justify-end gap-1 shrink-0 basis-full sm:basis-auto px-4 pb-3 sm:pb-0">
-        {entry.installed !== null ? (
-          <>
-            {hasUpdate(entry) && updateButton(entry)}
-            <span className="px-3 py-1.5 text-caption font-medium text-success bg-success/10 rounded-sm">
-              {t("plugins.installed_badge")}
-            </span>
-          </>
-        ) : (
-          !entry.builtIn && (
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() =>
-                act(entry.id, () => installRecipe(entry.id), t("recipeStore.installed"))
-              }
-              className="flex items-center gap-1.5 px-3 py-1.5 text-caption font-medium text-white bg-primary-fill hover:bg-primary-fill-hover rounded-sm transition-colors cursor-pointer disabled:opacity-50"
-            >
-              {busy === entry.id ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Download size={14} />
-              )}
-              {t("recipeStore.install")}
-            </button>
-          )
-        )}
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => act(entry.id, () => installRecipe(entry.repo), t("recipeStore.installed"))}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-caption font-medium text-white bg-primary-fill hover:bg-primary-fill-hover rounded-sm transition-colors cursor-pointer disabled:opacity-50"
+        >
+          {busy === entry.id ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : (
+            <Download size={14} />
+          )}
+          {t("recipeStore.install")}
+        </button>
       </div>
     </div>
   );
@@ -338,7 +352,7 @@ export function PluginsPage() {
     </div>
   );
 
-  if (store === null && message === null) {
+  if (plugins === null && message === null) {
     return (
       <div className="px-4 sm:px-6 flex items-center justify-center py-20">
         <Loader2 size={20} className="animate-spin text-text-tertiary" />
@@ -367,7 +381,7 @@ export function PluginsPage() {
             active={tab === "store"}
             onClick={() => setTab("store")}
             label={t("plugins.store")}
-            count={recipes.length}
+            count={store.length}
           />
         </div>
 
@@ -422,15 +436,15 @@ export function PluginsPage() {
           )
         ) : (
           <div className="space-y-2">
-            {store?.error && (
+            {catalogue?.error && (
               <p data-testid="read-error" className="text-small text-error mb-3">
-                {t("recipeStore.readError", { reason: store.error })}
+                {t("recipeStore.readError", { reason: catalogue.error })}
               </p>
             )}
             {listed.length === 0
               ? searching
                 ? noResults
-                : !store?.error && store?.readAt && empty(t("recipeStore.empty"))
+                : !catalogue?.error && catalogue?.readAt && empty(t("recipeStore.empty"))
               : listed.map(storeRow)}
           </div>
         )}

@@ -781,8 +781,8 @@ fn answer_pull(raw: &Raw, ticket: ReleaseTicket) -> bool {
     response.status == 200
 }
 
-/// `POST /api/v1/recipes/install`, `/recipes/:id/update`, `/recipes/:id/uninstall` or
-/// `/recipes/store/refresh`, once the core has let it through (spec 042): the download, the checks,
+/// `POST /api/v1/plugins/install`, `/plugins/:id/update`, `/plugins/:id/uninstall` or
+/// `/plugins/store/refresh`, once the core has let it through (spec 042): the download, the checks,
 /// the write and the removal. Runs on the permanent `recipe` thread (`FETCH_STACK_BYTES`, its stack in
 /// internal RAM: the flash is never touched from a worker); the loads and unloads go to the `script`
 /// thread, and the home's lock is never held across a download or a write.
@@ -840,7 +840,7 @@ fn after_job_thread<T>(raw: &Raw, label: &str, ran: Result<Option<T>, String>) -
     }
 }
 
-/// `GET /api/v1/system/backup`, once the core has let it through: the archive streams out in chunks
+/// `GET /api/v1/backup`, once the core has let it through: the archive streams out in chunks
 /// of 4 KB, from a buffer allocated for this request. The key derivation runs inside `export`,
 /// before the status line, so that every refusal is a whole answer. A read error ends the answer
 /// without its end: the client holds a truncated file, which its MAC refuses. Runs on the `backup`
@@ -886,7 +886,7 @@ fn answer_export(raw: &Raw, ticket: BackupTicket, password: Option<&str>) {
     }
 }
 
-/// `POST /api/v1/system/backup`, once the core has let it through: the body goes into
+/// `POST /api/v1/backup`, once the core has let it through: the body goes into
 /// `BackupTicket::restore`. Answers; true when the restore is staged and the ESP32 must restart
 /// (after `complete`, so the answer is out first). A refusal reads and drops the rest of
 /// the body, then the connection closes. Runs on the `backup` thread (`job_thread::run`): it writes the flash.

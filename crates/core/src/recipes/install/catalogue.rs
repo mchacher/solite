@@ -17,6 +17,13 @@ pub const MAX_CATALOGUE_BYTES: usize = 32 * 1024;
 pub const MAX_ENTRIES: usize = 32;
 /// The longest address of a catalogue's entry, in characters (as the setting's).
 pub const MAX_ENTRY_URL_CHARS: usize = 2048;
+/// The longest `repo` of an entry (`owner/name`), in characters.
+pub const MAX_ENTRY_REPO_CHARS: usize = 100;
+/// The most tags an entry carries, and the longest one, in characters.
+pub const MAX_ENTRY_TAGS: usize = 8;
+pub const MAX_ENTRY_TAG_CHARS: usize = 32;
+/// The longest `category` and `author` of an entry, in characters.
+pub const MAX_ENTRY_LABEL_CHARS: usize = 64;
 /// The catalogue's default address.
 pub const DEFAULT_CATALOGUE_URL: &str =
     "https://github.com/mchacher/solite-recipes/releases/latest/download/recipes.json";
@@ -42,6 +49,31 @@ pub struct Entry {
     /// The lowest firmware that runs it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_version: Option<String>,
+    /// The recipe's Sowel repository, `owner/name` (unique). Absent in a 0.3 catalogue: `parse`
+    /// then derives `solite-recipes/<id>`, so every entry read has one.
+    #[serde(default)]
+    pub repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+/// True for `owner/name` as Sowel's `REPO_FORMAT`: `[A-Za-z0-9-]+/[A-Za-z0-9._-]+`.
+pub fn repo_format(text: &str) -> bool {
+    let Some((owner, name)) = text.split_once('/') else {
+        return false;
+    };
+    !owner.is_empty()
+        && !name.is_empty()
+        && owner
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 impl Entry {
@@ -97,7 +129,13 @@ pub fn parse(body: &[u8]) -> Result<Vec<Entry>, String> {
             entries.len()
         ));
     }
-    for entry in &entries {
+    let mut entries = entries;
+    for entry in &mut entries {
+        if entry.repo.is_empty() {
+            entry.repo = format!("solite-recipes/{}", entry.id);
+        }
+    }
+    for (at, entry) in entries.iter().enumerate() {
         let bad = |field: &str| format!("Invalid catalogue: {}: {field}", entry.id);
         if entry.version().is_none() {
             return Err(bad("version"));
@@ -118,6 +156,30 @@ pub fn parse(body: &[u8]) -> Result<Vec<Entry>, String> {
         }
         if entry.url.len() > MAX_ENTRY_URL_CHARS || !url_allowed(&entry.url) {
             return Err(bad("url"));
+        }
+        if entry.repo.chars().count() > MAX_ENTRY_REPO_CHARS
+            || !repo_format(&entry.repo)
+            || entries[..at].iter().any(|other| other.repo == entry.repo)
+        {
+            return Err(bad("repo"));
+        }
+        let label_long = |text: &Option<String>| {
+            text.as_ref()
+                .is_some_and(|t| t.chars().count() > MAX_ENTRY_LABEL_CHARS)
+        };
+        if label_long(&entry.category) {
+            return Err(bad("category"));
+        }
+        if label_long(&entry.author) {
+            return Err(bad("author"));
+        }
+        if entry.tags.len() > MAX_ENTRY_TAGS
+            || entry
+                .tags
+                .iter()
+                .any(|tag| tag.chars().count() > MAX_ENTRY_TAG_CHARS)
+        {
+            return Err(bad("tags"));
         }
     }
     Ok(entries)
@@ -150,6 +212,48 @@ mod tests {
         let raw = entries[3].i18n.as_ref().unwrap().get();
         let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed["fr"]["slots"]["zone"]["description"], "La zone");
+    }
+
+    #[test]
+    fn an_entry_keeps_repo_category_author_and_tags_and_a_03_entry_gets_a_repo() {
+        let mut full = entry(1);
+        full["repo"] = json!("mchacher/sowel-recipe-r1");
+        full["category"] = json!("lighting");
+        full["author"] = json!("someone");
+        full["tags"] = json!(["a", "b"]);
+        let entries = parse(&body(vec![full, entry(2)])).unwrap();
+        assert_eq!(entries[0].repo, "mchacher/sowel-recipe-r1");
+        assert_eq!(entries[0].category.as_deref(), Some("lighting"));
+        assert_eq!(entries[0].author.as_deref(), Some("someone"));
+        assert_eq!(entries[0].tags, ["a", "b"]);
+        assert_eq!(entries[1].repo, "solite-recipes/r2");
+        assert!(entries[1].tags.is_empty());
+    }
+
+    #[test]
+    fn a_duplicate_or_malformed_repo_refuses_the_catalogue() {
+        let mut a = entry(1);
+        a["repo"] = json!("o/x");
+        let mut b = entry(2);
+        b["repo"] = json!("o/x");
+        assert_eq!(
+            parse(&body(vec![a, b])).unwrap_err(),
+            "Invalid catalogue: r2: repo"
+        );
+        for bad in ["noslash", "a/b/c", "/x", "o/", "o/ x"] {
+            let mut e = entry(1);
+            e["repo"] = json!(bad);
+            assert_eq!(
+                parse(&body(vec![e])).unwrap_err(),
+                "Invalid catalogue: r1: repo"
+            );
+        }
+        let mut e = entry(1);
+        e["tags"] = json!(vec!["x"; 9]);
+        assert_eq!(
+            parse(&body(vec![e])).unwrap_err(),
+            "Invalid catalogue: r1: tags"
+        );
     }
 
     #[test]

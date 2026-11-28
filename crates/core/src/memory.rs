@@ -273,4 +273,14 @@ pub struct Resources {
     pub psram: Option<PsramResources>,
     pub storage: StorageResources,
     pub scripts: Vec<ScriptResources>,
+    /// The recipe catalogue's last read (moved here from the store's answer, spec 059 R2).
+    pub catalogue: CatalogueResources,
+}
+
+/// When the recipe catalogue was last read, and why the last read failed, if it did.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogueResources {
+    pub read_at: Option<String>,
+    pub error: Option<String>,
 }

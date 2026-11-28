@@ -77,7 +77,7 @@ notification publishers, push, logs, audit, camera (out of the true north).
   host's `crates/host/tests/box_session_script.rs` (~2404, ~2418), `crates/core/tests/recipe_install.rs`,
   `memory_worst_case.rs`.
 - `docs/sowel-subset.md`, `contract/sowel-snapshot.json` (rewritten by the contract test with
-  Sowel's repository beside), `docs/living-spec/README.md`, `docs/decisions.md` (D88),
+  Sowel's repository beside), `docs/living-spec/README.md`, `docs/decisions.md` (D89),
   `docs/architecture.md`, `docs/roadmap.md`, `docs/roadmap.html`.
 
 ## Sowel files each change mirrors

@@ -5,20 +5,20 @@ Two pull requests. PR 1 (steps 1 to 6): the recipes under `/plugins`, core, inte
 `crates/core/src/recipes/script/` and `firmware/`, which steps 5 and 8 touch lightly).
 
 ## Steps
-- [ ] 1. Catalogue: `repo`, `category`, `author`, `tags` in `Entry`, bounds, the `repo` checks
+- [x] 1. Catalogue: `repo`, `category`, `author`, `tags` in `Entry`, bounds, the `repo` checks
       (unique, `owner/name`, derived `solite-recipes/<id>`), tests.
-- [ ] 2. Core views and routes: `installed_plugins()` and `store_entries()` in `install_ops.rs`,
+- [x] 2. Core views and routes: `installed_plugins()` and `store_entries()` in `install_ops.rs`,
       `GET /plugins`, `GET /plugins/store` in `api/recipes.rs`, `ROUTES`; `installedAt` from the
       script store's file date.
-- [ ] 3. The jobs: `POST /plugins/install` (JSON by `repo`, octet-stream by file), `/plugins/store/refresh`
+- [x] 3. The jobs: `POST /plugins/install` (JSON by `repo`, octet-stream by file), `/plugins/store/refresh`
       (`{count, source}`), `/plugins/:id/update`, `/plugins/:id/uninstall`; safe mode's exception;
       the five old routes removed; the existing `recipe_install.rs` tests moved to the new paths.
-- [ ] 4. Host and firmware path matches (`serve.rs`, `http_server.rs`): the new names; the
+- [x] 4. Host and firmware path matches (`serve.rs`, `http_server.rs`): the new names; the
       host's `box_session_script.rs` and the scripts (`box-session.sh`) on the new paths.
-- [ ] 5. Interface: `recipeStore.ts` types and paths, `PluginsPage`, `useRecipeUpdates`; Vitest.
-- [ ] 6. Docs: `sowel-subset.md`, snapshot rewrite, living spec, D88, architecture, roadmap;
+- [x] 5. Interface: `recipeStore.ts` types and paths, `PluginsPage`, `useRecipeUpdates`; Vitest.
+- [x] 6. Docs: `sowel-subset.md`, snapshot rewrite, living spec, D89, architecture, roadmap;
       `sh scripts/validate.sh` (QEMU included); PR 1.
-- [ ] 7. `/backup` at Sowel's path (core route, host and firmware matches, the backup card, the
+- [x] 7. `/backup` at Sowel's path (core route, host and firmware matches, the backup card, the
       backup tests, `box-session.sh`), docs; validate; PR 2.
 - [ ] 8. On the box (the user runs `box-session.sh`): install, update, remove through the new
       paths; a backup and its restore; the internal RAM's lowest point not lower than spec 056's.

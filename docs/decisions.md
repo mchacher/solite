@@ -1779,3 +1779,27 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   (it ran `--skip-slow`, about 5 minutes and four firmware builds per commit).
 - **Rejected**: the full verdict before every commit (D9's first form): its cost grew with the
   firmware images and QEMU until it set the pace of the work.
+
+## D89: The recipes under Sowel's `/plugins`, the backup at `/backup`, the old paths removed (replaces D78's and D56's routes, not their designs, spec 059)
+
+- **Date**: 2026-11-28
+- **Context**: Solite served its script-recipe store at five routes of its own (`/recipes/store`,
+  `/recipes/store/refresh`, `/recipes/install`, `/recipes/:id/update`, `/recipes/:id/uninstall`,
+  D78) and the full backup at `/system/backup` (D56), where Sowel serves the same jobs for the same
+  packages at `/plugins/*` and `/backup`. A tool made for Sowel could not install a recipe on the
+  box. The user's aim: the API as close to 100 % as possible to Sowel's.
+- **Choice**: the routes move to Sowel's paths with Sowel's shapes: `GET /plugins` (`PluginInfo`),
+  `GET /plugins/store` (the bare list of store entries, the installed ones left out),
+  `POST /plugins/store/refresh` (`{count, source}`), `POST /plugins/install` (`{repo}`, or the
+  signed file as the body, Solite's), `POST /plugins/:id/update` and `/uninstall`, all answering
+  `{"success": true}`; `GET` and `POST /backup`, with Solite's encrypted file (D56). The catalogue's
+  entries gain an optional `repo` (`owner/name`, `solite-recipes/<id>` when absent), `category`,
+  `author` and `tags`. The catalogue's read date and error move to `GET /system/resources` and the
+  Resources card. The old paths are removed, with no alias: the interface is embedded in the same
+  image and moves with the firmware.
+- **Rejected**: an alias of the old paths for one release (a second set of routes, both answer
+  shapes built on a box short of internal RAM, and a deviation row to remember to remove); keeping
+  `readAt` and `error` in the store's answer (Sowel's is a bare list).
+- **Consequence**: a browser tab opened before the update gets 404 on the old paths until reloaded.
+  `installedAt` is the install's time while the box runs (`null` when the clock was not set or the
+  box restarted since); the file's modification time is not read.

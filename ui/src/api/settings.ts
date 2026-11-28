@@ -43,12 +43,12 @@ const passwordHeader = (password: string) => ({
   "X-Backup-Password": encodeURIComponent(password),
 });
 
-/** The full backup (spec 035): the archive of `GET /api/v1/system/backup`, as a file. */
+/** The full backup (spec 035): the archive of `GET /api/v1/backup`, as a file. */
 export async function exportBackup(password: string): Promise<Blob> {
-  return fetchBlob(`${API_BASE}/system/backup`, { headers: passwordHeader(password) });
+  return fetchBlob(`${API_BASE}/backup`, { headers: passwordHeader(password) });
 }
 
-/** The answer of `POST /api/v1/system/backup`. */
+/** The answer of `POST /api/v1/backup`. */
 export interface RestoreResult {
   success: boolean;
   message: string;
@@ -62,7 +62,7 @@ export async function restoreBackup(
   password: string,
   wifi: boolean,
 ): Promise<RestoreResult> {
-  return fetchJSON<RestoreResult>(`${API_BASE}/system/backup${wifi ? "?wifi=true" : ""}`, {
+  return fetchJSON<RestoreResult>(`${API_BASE}/backup${wifi ? "?wifi=true" : ""}`, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream", ...passwordHeader(password) },
     body: file,

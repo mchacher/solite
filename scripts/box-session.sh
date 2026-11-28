@@ -496,14 +496,14 @@ group_home() {
   # box, 70 to 88 s measured once before D59, hence a timeout above the export's own 120 s limit),
   # then its restore with a wrong password, which must change nothing.
   HTTP_MAX=130
-  http GET /system/backup -H "@$AUTH_FILE" -H "X-Backup-Password: box-session-test"
+  http GET /backup -H "@$AUTH_FILE" -H "X-Backup-Password: box-session-test"
   if [ "$CODE" != 200 ]; then
-    check 1 backup KO "GET /system/backup answered $CODE: $(errtext)"
+    check 1 backup KO "GET /backup answered $CODE: $(errtext)"
   elif [ "$(head -c 8 "$TMP/body")" != SOLITEBK ]; then
     check 1 backup KO "the file does not start with SOLITEBK"
   else
     cp "$TMP/body" "$TMP/backup.slb"
-    http POST /system/backup -H "@$AUTH_FILE" -H "Content-Type: application/octet-stream" \
+    http POST /backup -H "@$AUTH_FILE" -H "Content-Type: application/octet-stream" \
       -H "X-Backup-Password: not-the-test-password" --data-binary "@$TMP/backup.slb"
     if [ "$CODE" = 400 ] && [ "$(errtext)" = "Wrong backup password" ]; then
       check 1 backup OK "exported, wrong-password restore refused 400"
@@ -514,7 +514,7 @@ group_home() {
       # The pairing window (180 s after a power-on) refuses a restore before the password is read.
       check 1 backup skipped "exported; restore not checked (pairing window open: $(errtext))"
     else
-      check 1 backup KO "POST /system/backup with a wrong password answered $CODE: $(errtext)"
+      check 1 backup KO "POST /backup with a wrong password answered $CODE: $(errtext)"
     fi
   fi
   HTTP_MAX=30
@@ -903,7 +903,7 @@ script_cleanup() {
     check 7 "uploaded recipe" OK "kept: an instance of motion-light uses it"
     return
   fi
-  http POST /recipes/motion-light/uninstall -H "@$AUTH_FILE"
+  http POST /plugins/motion-light/uninstall -H "@$AUTH_FILE"
   case "$CODE" in
     200 | 204) RECIPE_UPLOADED=; check 7 "uploaded recipe" OK "no instance uses it: uninstalled again" ;;
     *) check 7 "uploaded recipe" KO "motion-light was not uninstalled ($CODE)" ;;
@@ -953,8 +953,8 @@ group_script() {
       check 1 "script recipe on the box" KO "the recipe file $SOLITE_SESSION_RECIPE_FILE does not exist"
       return
     fi
-    http POST /recipes/install -H "@$AUTH_FILE" -H "Content-Type: application/octet-stream" --data-binary "@$SOLITE_SESSION_RECIPE_FILE"
-    if [ "$CODE" != 201 ]; then
+    http POST /plugins/install -H "@$AUTH_FILE" -H "Content-Type: application/octet-stream" --data-binary "@$SOLITE_SESSION_RECIPE_FILE"
+    if [ "$CODE" != 200 ]; then
       check 1 "script recipe on the box" KO "uploading $SOLITE_SESSION_RECIPE_FILE answered $CODE: $(errtext)"
       return
     fi

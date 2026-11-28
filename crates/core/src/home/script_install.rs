@@ -63,10 +63,9 @@ impl Home {
             self.releases.note_refresh(wall);
         }
         match &op {
-            Op::Install { id } => self.check_install_id(id)?,
             Op::Update { id } => self.check_update_id(id)?,
             Op::Uninstall { id } => self.check_uninstall_id(id)?,
-            Op::Refresh | Op::Upload { .. } => {}
+            Op::Install { .. } | Op::Refresh | Op::Upload { .. } => {}
         }
         Ok(RecipeTicket {
             mark,
@@ -174,6 +173,7 @@ impl Home {
     pub(crate) fn install_commit(&mut self, id: &str, wall: u64) -> Option<String> {
         self.install.refused.retain(|refused| refused.id != id);
         self.keep_file(id);
+        self.note_installed(id, wall);
         let mono = self.mono(wall);
         self.with_engine(|engine, home| {
             engine.start_recipe_instances(home, id, "Failed to start", wall, mono);
@@ -250,6 +250,7 @@ impl Home {
     /// The new file is written: the instances start again with their settings.
     pub(crate) fn update_commit(&mut self, id: &str, wall: u64) -> Option<String> {
         self.keep_file(id);
+        self.note_installed(id, wall);
         let mono = self.mono(wall);
         self.with_engine(|engine, home| {
             engine.start_recipe_instances(home, id, "Failed to restart", wall, mono);
@@ -287,6 +288,7 @@ impl Home {
         }
         self.with_engine(|engine, _| engine.remove_script(id, wall, false));
         self.install.refused.retain(|refused| refused.id != id);
+        self.forget_installed(id);
     }
 
     /// The factory reset's part (R3.9): the installed runtimes are dropped (their instances go

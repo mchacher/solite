@@ -135,7 +135,7 @@ box) cannot install a recipe on the box today.
 ### docs/sowel-subset.md
 - Routes and Deviations tables (R8), the plugin install's file body, the backup's content.
 ### docs/decisions.md
-- D88: the recipes under Sowel's `/plugins`, the old paths removed with no alias (replaces D78's
+- D89: the recipes under Sowel's `/plugins`, the old paths removed with no alias (replaces D78's
   routes, not its design), the backup at `/backup`.
 ### docs/architecture.md, docs/roadmap.md, docs/roadmap.html
 - The routes' module comment; the roadmap row "Same API as Sowel": first increment done, what

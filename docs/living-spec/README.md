@@ -406,12 +406,12 @@ recipes"). The routes:
 | `POST /api/v1/system/factory-reset` | 204: erases the home and the account (see "Protects the home with a password") |
 | `GET /api/v1/system/version`, `POST /api/v1/system/version/check`, `POST /api/v1/system/update` | the version and the last check's latest release; a check now; the signed update file as the body, or an empty body to pull the latest release (see "Updates itself from a signed file") |
 | `POST /api/v1/system/restart` | restarts the box (an empty body; see "Restarts on request" under "Updates itself from a signed file") |
-| `GET /api/v1/system/backup`, `POST /api/v1/system/backup` | the full backup file, with the password in `X-Backup-Password`; its restore (see "Backs up and restores the whole box") |
+| `GET /api/v1/backup`, `POST /api/v1/backup` | the full backup file, with the password in `X-Backup-Password`; its restore (see "Backs up and restores the whole box") |
 | `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
 | `GET /ws` (WebSocket) | live events (see "Live events" below) |
 | `GET /`, `GET /assets/<file>` | the interface (see "Shows the home in the browser") |
 | `/api/v1/recipes`, `/api/v1/recipe-instances` | the recipe and its instances (see "Runs the motion-light recipe") |
-| `GET /api/v1/recipes/store`, `POST /api/v1/recipes/store/refresh`, `POST /api/v1/recipes/install`, `POST /api/v1/recipes/:id/update`, `POST /api/v1/recipes/:id/uninstall` | Solite's catalogue of script recipes and their install, update and removal (see "Runs script recipes") |
+| `GET /api/v1/plugins`, `GET /api/v1/plugins/store`, `POST /api/v1/plugins/store/refresh`, `POST /api/v1/plugins/install`, `POST /api/v1/plugins/:id/update`, `POST /api/v1/plugins/:id/uninstall` | Sowel's plugin routes, for the script recipes: the installed ones, the catalogue, their install, update and removal (see "Runs script recipes") |
 | `GET /api/v1/system/resources` | the memories, the storage and the script recipes' rows (see "Shows its resources") |
 
 Errors are `{"error": "<message>"}` (400, 401, 403, 404, 405, 409, 411, 413, 415, 426, 429; 500 `Update failed: <message>`, `Update check failed: <reason>` and `Download failed: <reason>`, and 501 on the update and check routes (501 on the backup routes too, through the plain handler); 502 for an order no device took; 503 `Busy` beyond 4 requests at
@@ -479,7 +479,7 @@ except:
 - On the box the server is one task (ESP-IDF's): it waits at most 2 s for the next bytes of a request (an inactivity gap, so a large upload that keeps flowing is not cut), and a connection that sent its headers and never its body holds that task for 2 s, during which every other request waits. The task answers 408 and moves on.
 - In safe mode (see "Supervises its engine") every request that is not a `GET` answers 503
   `{"error": "Safe mode: the engine is stopped"}`, except the account's routes (`/auth/*`),
-  `POST /api/v1/system/update`, `POST /api/v1/system/version/check`, `POST /api/v1/system/restart` and `POST /api/v1/recipes/:id/uninstall` (the way out of a script that breaks the engine); a restore and a factory reset are refused too.
+  `POST /api/v1/system/update`, `POST /api/v1/system/version/check`, `POST /api/v1/system/restart` and `POST /api/v1/plugins/:id/uninstall` (the way out of a script that breaks the engine); a restore and a factory reset are refused too.
 - At most 12 connections are open; beyond, the least recently used is closed. At most 4 requests
   are answered at once; a 5th gets 503 `{"error":"Busy"}`.
 
@@ -684,18 +684,19 @@ times computed from them, as Sowel's sunlight manager does.
 One file, the **backup** (`.slb`, "Solite backup"), holds everything needed to rebuild a box: the
 home (devices, rooms, equipments, recipe instances, settings), the Zigbee network (PAN, channel,
 keys) and the Wi-Fi settings. A box replaced or a lost `storage` partition no longer means pairing
-every device again and building the home again. Solite's own routes, at a path Sowel does not use
-(Sowel's `/api/v1/backup` is a ZIP of its database, not mirrored, decision D56; `/api/v1/backup`
-answers 404), behind the token:
+every device again and building the home again. Sowel's routes (`GET` and `POST /api/v1/backup`, D89), with Solite's file (a
+password-protected archive, not Sowel's ZIP of its database, decision D56); Sowel's `/backup/local`
+and `/backup/restore-local` answer 404, and so does the old `/api/v1/system/backup`; behind the
+token:
 
-- **Export**: `GET /api/v1/system/backup` with the password in the header `X-Backup-Password`
+- **Export**: `GET /api/v1/backup` with the password in the header `X-Backup-Password`
   (percent-encoded UTF-8, so any character fits; never in the address). 200
   `application/octet-stream`, `Content-Disposition: attachment; filename="solite-backup.slb"`, sent
   in chunks (the size is not known ahead). The password is 8 to 128 characters: missing, 400
   `Backup password required`; too short or too long, 400 `Backup password must be 8 to 128
   characters`. Another export or restore running: 409 `Backup already in progress`. These
   refusals are whole JSON answers, before the file starts.
-- **Restore**: `POST /api/v1/system/backup` with the file as the body (`application/octet-stream`,
+- **Restore**: `POST /api/v1/backup` with the file as the body (`application/octet-stream`,
   415 otherwise; on the box a missing `Content-Length` is 411) and the password in the same
   header. `?wifi=true` also restores the Wi-Fi settings; without it, the box keeps its own.
   Before the body is read, in this order: the token, the content type, the confirmation at the box
@@ -1036,7 +1037,7 @@ same routes and from a room's page, with the same log, state and events.
 - **Its form**: `recipe({ api: 1, id, name, description, slots, icon?, i18n?, version?, validate?,
   start })`, called once. `api` must be 1; `id` is 1 to 64 lower-case letters, digits and `-` (1 to 32 for an installed
   script), not one already loaded, and never `store` or `install` (`Script recipe invalid: id <id>
-  is reserved`: `/recipes/store` and `/recipes/install` sit beside Sowel's `/recipes/:recipeId`). An
+  is reserved`, kept from the days the store routes sat under `/recipes`). An
   installed script must declare `version` as `x.y.z` (three numbers of 0 to 65535: `Script recipe
   invalid: version must be x.y.z`); the version of a script given by `--recipe-script` stays free. The slots are Sowel's (`zone`, `equipment`, `number`, `duration`, `time`,
   `boolean`, `select`, `text` and `data-key`: a text of at most 64 bytes, `Invalid params: <slot> must be a text` or
@@ -1090,8 +1091,10 @@ same routes and from a room's page, with the same log, state and events.
   pair is made with `--update-keygen`.
 - **The catalogue**: `recipes.json`, unsigned (each file is signed and pinned by its SHA-256):
   `{"format": 1, "recipes": [{id, version, name, description, i18n?, icon?, size, sha256, url,
-  minVersion?}]}`, at most 32 entries and 32 KB, `size` at most 32,896 bytes; refused as a whole, the
-  last good list kept, when over a bound, not JSON, of another format, an entry's `i18n` is not a JSON object, or an entry's `url` breaks
+  minVersion?, repo?, category?, author?, tags?}]}`, at most 32 entries and 32 KB (`repo`: `owner/name`, at
+  most 100 characters, unique, `solite-recipes/<id>` when absent; `category` and `author` at most
+  64 characters; at most 8 tags of 32 characters), `size` at most 32,896 bytes; refused as a whole, the
+  last good list kept, when over a bound, not JSON, of another format, an entry's `i18n` is not a JSON object, an entry's `repo` is malformed or repeated (`Invalid catalogue: <id>: repo`), or an entry's `url` breaks
   the update URL rule (https, or http on the home network). Its address is the setting
   `recipes.catalogue` (at most 512 characters, the same rule, 400 at the save; empty or unset
   means `https://github.com/mchacher/solite-recipes/releases/latest/download/recipes.json`). It is
@@ -1103,20 +1106,35 @@ same routes and from a room's page, with the same log, state and events.
   install), `update load`, `update store` (an update), `removal unloaded`, `removal stored` (a
   removal). The engine's allocations of 512 bytes or less stay in internal RAM, larger ones are in
   PSRAM (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512`, D86).
-- **Routes** (Solite's own, administrator): `GET /api/v1/recipes/store` answers what is held,
-  never the network: `{"recipes": [<entry> + "installed", "refused", "builtIn"], "readAt",
-  "error"}` (`{"recipes": [], "readAt": null, "error": null}` before any read);
-  `POST /api/v1/recipes/store/refresh` reads it again (at most once a minute: 429; 503 `The clock
-  is not set yet: reading the recipe catalogue needs the date`; a failed read keeps the list and
-  answers it with `error`, 200); `POST /api/v1/recipes/install` with `{"id"}` (the catalogue's
-  entry) or an `application/octet-stream` body (a signed file of at most 32,896 bytes: 32 KB of source and its header), 201 with the
-  recipe's `RecipeInfo` and its `version`; `POST /api/v1/recipes/:id/update` (the catalogue's
-  version must be newer: 409 `<id> <x.y.z> is not newer than <x.y.z>`; an upload of a signed file
-  of an installed recipe updates it the same way; an upload's id is read from the `id: "..."` text of its `recipe({...})` call without loading it, 400 when there is none, and the load refuses a script that declares another; `POST /api/v1/recipes/:id/uninstall`, 204.
+- **Routes** (Sowel's `/plugins` routes, administrator, D89; the old `/recipes/store`,
+  `/recipes/install`, `/recipes/:id/update` and `/recipes/:id/uninstall` are gone, `GET
+  /recipes/store` meets `GET /recipes/:id` and answers 404 `Recipe not found`):
+  `GET /api/v1/plugins` answers what the box holds, never the network: Sowel's `PluginInfo` of
+  each script recipe running (the `--recipe-script` ones too): `{"manifest": {id, name, version,
+  description, icon?, repo, "type": "recipe", category?, author?}, "enabled": true, "installedAt"
+  (ISO 8601, `null` when the clock was not set at the install or the box restarted since),
+  "status": "connected", "deviceCount": 0, "offlineDeviceCount": 0, "latestVersion"? (the held
+  catalogue holds a newer one), "source": "registry"}`; a file refused at start is not listed (its
+  reason is in `GET /system/resources`). `GET /api/v1/plugins/store` answers Sowel's bare list of the
+  catalogue's entries that are neither installed nor built in: the manifest fields with `compatible`,
+  `compatReason` (`Requires Solite >= <x.y.z>` when `minVersion` is above the running version),
+  `isOfficial` true, `tier` `official`, `i18n?` served whole and `tags?`; `[]` before any read. `POST
+  /api/v1/plugins/store/refresh` reads the catalogue again and answers `{"count", "source":
+  "remote"}` (at most once a minute: 429; 503 `The clock is not set yet: reading the recipe
+  catalogue needs the date`; a failed read keeps the list and answers `source: "local"`, the
+  reason in the log and in `catalogue.error` of `GET /system/resources`). `POST
+  /api/v1/plugins/install` with `{"repo": "owner/name", "confirmed"?, "expectedSha256"?}` (the
+  catalogue's entry of that repository; the last two are ignored: the signature is the check) or an
+  `application/octet-stream` body (a signed file of at most 32,896 bytes: 32 KB of source and its header), 200
+  `{"success": true}`; a body with no valid `repo` is 400 `Invalid 'repo' field (expected
+  owner/repo)`, a repository the catalogue lacks 404 `Plugin not found`, an installed one 409
+  `Recipe already installed`. `POST /api/v1/plugins/:id/update` (the body is optional and ignored;
+  the catalogue's version must be newer: 409 `<id> <x.y.z> is not newer than <x.y.z>`; an upload of a signed file
+  of an installed recipe updates it the same way; an upload's id is read from the `id: "..."` text of its `recipe({...})` call without loading it, 400 when there is none, and the load refuses a script that declares another) and `POST /api/v1/plugins/:id/uninstall` answer 200 `{"success": true}`.
   Install is refused, in order: the build's key (503), the one-job rule (409, below), the internal
-  RAM (503), the id of a `--recipe-script` (409 `<id> is built in`), a loaded id (409 `<id> is installed: update
-  it`), four script recipes loaded (409 `Too many script recipes (at most 4)`), an id the catalogue
-  lacks (404 `Recipe not in the catalogue: <id>`), a `minVersion` above the firmware (409 `<id>
+  RAM (503), a `repo` the catalogue lacks (404 `Plugin not found`), the id of a `--recipe-script`
+  (409 `<id> is built in`), a loaded id (409 `Recipe already installed`), four script recipes
+  loaded (409 `Too many script recipes (at most 4)`), a `minVersion` above the firmware (409 `<id>
   <x.y.z> needs Solite <minVersion> or later`), an unreachable catalogue or a failed download
   (502 with the reason; the download is resumed as an update's, at most three times), a size,
   SHA-256 or version that differs from the entry (400), the file's checks (400), the memory (409).
@@ -1208,7 +1226,9 @@ same routes and from a room's page, with the same log, state and events.
 "minFree", "largestBlock"} | null, "psram": {"free", "minFree", "total", "reserve"} | null,
 "storage": {"used", "total" | null}, "scripts": [{"id", "version" | null, "source": "builtIn" |
 "installed", "state": "ready" | "failed" | "refused", "reason" | null, "held", "limit",
-"instances", "calls", "averageUs", "maxUs"}]}`, bytes and microseconds as numbers. `builtIn` is a
+"instances", "calls", "averageUs", "maxUs"}], "catalogue": {"readAt" (ISO 8601) | null, "error" |
+null}}`, bytes and microseconds as numbers; `catalogue` is when the recipe catalogue was last read
+and why the last read failed (they were in the store's answer before D89). `builtIn` is a
 script given by `--recipe-script`; a refused file has `held` 0. The Mac answers `internal` and
 `psram` `null` and `storage.total` `null` (`used`: the files of its data folder). The storage
 figures are never read by the request (a worker's stack is in PSRAM and must not touch the flash):
@@ -1422,18 +1442,17 @@ copy embedded in the radio image at build time.
   minute." The upload is disabled during a pull or a check, and they are during an upload. The file
   goes as the body, `Content-Type: application/octet-stream`, with the bearer token. French and English labels.
   The **Resources** card (Settings, after the Restart card) shows `GET /api/v1/system/resources` (the internal RAM and the PSRAM as a bar each, with the
-  lowest free and the PSRAM reserve marked, the storage used, one row per script recipe with its
+  lowest free and the PSRAM reserve marked, the storage used, when the recipe catalogue was read and why a read failed, one row per script recipe with its
   version, source, memory held against its limit, instances and call times; a row hidden when its
   figure is `null`). French and English.
   The **Plugins** page (`#/plugins`, Administration, after Discovery; Sowel's page cut to script
   recipes, with no category filter): two tabs with their counts, **Installed** (each installed
-  recipe with its name and version, Update when the catalogue holds a newer one, Remove, whose
+  recipe of `GET /api/v1/plugins` with its name and version, Update when it names a `latestVersion`, Remove, whose
   second click says how many instances go with it: "Confirm? 2 instances will be deleted"; the
-  files refused at start with their reason, and the installed files the catalogue does not list,
-  with Remove) and **Store** (the catalogue, with Install, or the "Installed" mark and Update; a
-  recipe the program provides itself marked "Provided by Solite" with no button; the error of the
-  last read), a search field over the id, name and description of the tab shown; it offers no upload of a signed
-  file (that stays the API's route, `POST /api/v1/recipes/install`, for the developer). It asks the refresh when it
+  files refused at start with their reason, read from the resources, with Remove) and **Store**
+  (`GET /api/v1/plugins/store`, with Install by the entry's `repo`; the refusal of a file of that id
+  when there is one; the error of the last read, from the resources), a search field over the id, name and description of the tab shown; it offers no upload of a signed
+  file (that stays the API's route, `POST /api/v1/plugins/install`, for the developer). It asks the refresh when it
   opens and shows the list held when that answers 429; the server's own words show for a refusal.
   French and English.
   The **Restart** card (after the Firmware update card): a "Restart" button, a confirmation ("Restart
@@ -1769,7 +1788,7 @@ way in. Nothing of this writes the flash.
   no recipe). The home is loaded and served, so one can log in, look for a release and install an update; a home that
   cannot be loaded is replaced in RAM by an empty one (logged), and the stored files are never
   touched. Every request that is not a `GET` is refused with 503 but the account's, the update's, the release check's (`POST /api/v1/system/version/check`),
-  the restart's (`POST /api/v1/system/restart`, D79) and a script recipe's uninstall (`POST /api/v1/recipes/:id/uninstall`);
+  the restart's (`POST /api/v1/system/restart`, D79) and a script recipe's uninstall (`POST /api/v1/plugins/:id/uninstall`);
   no installed script recipe is loaded (each is shown `refused`, `Safe mode: not loaded`);
   a restore and a factory reset need the presence a power-on gives, so they are refused too: the
   restart and the update are the ways out over the network (a restart asked for clears the safe

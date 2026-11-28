@@ -1,18 +1,20 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RecipeStore, Resources, StoreEntry } from "../../api";
+import type { PluginInfo, Resources, StoreEntry } from "../../api";
 import { mockApi, recipeInstance, resetStores } from "../../test-utils";
 import { resetRecipeUpdates } from "../layout/useRecipeUpdates";
 import { Sidebar } from "../layout/Sidebar";
 import { PluginsPage } from "./PluginsPage";
 
-const STORE = "GET /api/v1/recipes/store";
-const REFRESH = "POST /api/v1/recipes/store/refresh";
-const INSTALL = "POST /api/v1/recipes/install";
-const UPDATE = "POST /api/v1/recipes/a/update";
-const UNINSTALL_A = "POST /api/v1/recipes/a/uninstall";
-const UNINSTALL_BAD = "POST /api/v1/recipes/bad/uninstall";
+const PLUGINS = "GET /api/v1/plugins";
+const STORE = "GET /api/v1/plugins/store";
+const REFRESH = "POST /api/v1/plugins/store/refresh";
+const INSTALL = "POST /api/v1/plugins/install";
+const UPDATE = "POST /api/v1/plugins/a/update";
+const UNINSTALL_A = "POST /api/v1/plugins/a/uninstall";
+const UNINSTALL_BAD = "POST /api/v1/plugins/bad/uninstall";
 const RESOURCES = "GET /api/v1/system/resources";
+const REFRESHED = { body: { count: 1, source: "remote" } };
 
 afterEach(() => {
   cleanup();
@@ -22,36 +24,56 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** A catalogue recipe not installed, Sowel's store entry. */
 const entry = (id: string, version: string, extra: Partial<StoreEntry> = {}): StoreEntry => ({
   id,
   version,
   name: `Recipe ${id}`,
   description: `What ${id} does`,
-  size: 3000,
-  sha256: "0".repeat(64),
-  url: `https://example.com/${id}.srs`,
-  installed: null,
-  refused: null,
-  builtIn: false,
+  repo: `solite-recipes/${id}`,
+  type: "recipe",
+  compatible: true,
+  isOfficial: true,
+  tier: "official",
   ...extra,
 });
 
-const store = (recipes: StoreEntry[], error: string | null = null): RecipeStore => ({
-  recipes,
-  readAt: "2026-11-27T10:00:00.000Z",
-  error,
+/** An installed recipe, Sowel's `PluginInfo`. */
+const plugin = (
+  id: string,
+  version: string,
+  extra: { latestVersion?: string; name?: string } = {},
+): PluginInfo => ({
+  manifest: {
+    id,
+    name: extra.name ?? `Recipe ${id}`,
+    version,
+    description: `What ${id} does`,
+    repo: `solite-recipes/${id}`,
+    type: "recipe",
+  },
+  enabled: true,
+  installedAt: "2026-11-27T10:00:00.000Z",
+  status: "connected",
+  deviceCount: 0,
+  offlineDeviceCount: 0,
+  latestVersion: extra.latestVersion,
+  source: "registry",
 });
 
-const resources = (refused: string[] = [], uploaded: string[] = []): Resources => ({
+const resources = (
+  refused: string[] = [],
+  catalogue: Resources["catalogue"] = { readAt: "2026-11-27T10:00:00.000Z", error: null },
+): Resources => ({
   internal: null,
   psram: null,
   storage: { used: 0, total: null },
-  scripts: [...refused, ...uploaded].map((id) => ({
+  scripts: refused.map((id) => ({
     id,
-    version: refused.includes(id) ? null : "0.1.0",
+    version: null,
     source: "installed",
-    state: refused.includes(id) ? "refused" : "ready",
-    reason: refused.includes(id) ? "Invalid signature" : null,
+    state: "refused",
+    reason: "Invalid signature",
     held: 0,
     limit: 0,
     instances: 0,
@@ -59,6 +81,7 @@ const resources = (refused: string[] = [], uploaded: string[] = []): Resources =
     averageUs: 0,
     maxUs: 0,
   })),
+  catalogue,
 });
 
 /** Remove asks a second click ("Confirm?") before it uninstalls. */
@@ -71,10 +94,10 @@ const tab = (name: RegExp) => fireEvent.click(screen.getByRole("tab", { name }))
 
 describe("PluginsPage", () => {
   it("lists the installed recipes first, with the counts of both tabs", async () => {
-    const both = store([entry("a", "1.0.0", { installed: "1.0.0" }), entry("b", "2.0.0")]);
     mockApi({
-      [STORE]: { body: both },
-      [REFRESH]: { body: both },
+      [PLUGINS]: { body: [plugin("a", "1.0.0")] },
+      [STORE]: { body: [entry("b", "2.0.0"), entry("c", "1.0.0")] },
+      [REFRESH]: REFRESHED,
       [RESOURCES]: { body: resources() },
     });
     render(<PluginsPage />);
@@ -89,11 +112,13 @@ describe("PluginsPage", () => {
   });
 
   it("lists the catalogue in the Store tab, reading it again when the page opens", async () => {
-    const held = store([entry("a", "1.0.0")]);
-    const fresh = store([entry("a", "1.0.0"), entry("b", "2.0.0")]);
     const api = mockApi({
-      [STORE]: { body: held },
-      [REFRESH]: { body: fresh },
+      [PLUGINS]: { body: [] },
+      [STORE]: [
+        { body: [entry("a", "1.0.0")] },
+        { body: [entry("a", "1.0.0"), entry("b", "2.0.0")] },
+      ],
+      [REFRESH]: REFRESHED,
       [RESOURCES]: { body: resources() },
     });
     render(<PluginsPage />);
@@ -108,7 +133,8 @@ describe("PluginsPage", () => {
 
   it("shows the list held when the refresh answers 429", async () => {
     mockApi({
-      [STORE]: { body: store([entry("a", "1.0.0")]) },
+      [PLUGINS]: { body: [] },
+      [STORE]: { body: [entry("a", "1.0.0")] },
       [REFRESH]: { status: 429, body: { error: "Please wait 42s before refreshing again" } },
       [RESOURCES]: { body: resources() },
     });
@@ -119,12 +145,12 @@ describe("PluginsPage", () => {
     expect(screen.queryByText(/Please wait/)).toBeNull();
   });
 
-  it("installs a recipe from the Store tab and shows it installed", async () => {
-    const after = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
+  it("installs a recipe by its repo from the Store tab and shows it installed", async () => {
     const api = mockApi({
-      [STORE]: [{ body: store([entry("a", "1.0.0")]) }, { body: after }],
-      [REFRESH]: { body: store([entry("a", "1.0.0")]) },
-      [INSTALL]: { status: 201, body: { id: "a", version: "1.0.0" } },
+      [PLUGINS]: [{ body: [] }, { body: [] }, { body: [plugin("a", "1.0.0")] }],
+      [STORE]: [{ body: [entry("a", "1.0.0", { repo: "someone/sowel-recipe-a" })] }, { body: [] }],
+      [REFRESH]: REFRESHED,
+      [INSTALL]: { body: { success: true } },
       [RESOURCES]: { body: resources() },
     });
     render(<PluginsPage />);
@@ -134,30 +160,28 @@ describe("PluginsPage", () => {
       within(await screen.findByTestId("recipe-a")).getByRole("button", { name: "Install" }),
     );
     await screen.findByText("Recipe installed.");
-    expect(api.calls.find((c) => c.key === INSTALL)?.body).toEqual({ id: "a" });
-    await waitFor(() =>
-      expect(
-        within(screen.getByTestId("recipe-a")).queryByRole("button", { name: "Install" }),
-      ).toBeNull(),
-    );
-    expect(screen.getByTestId("recipe-a").textContent).toContain("Installed");
+    expect(api.calls.find((c) => c.key === INSTALL)?.body).toEqual({
+      repo: "someone/sowel-recipe-a",
+    });
+    await waitFor(() => expect(screen.queryByTestId("recipe-a")).toBeNull());
     tab(/^Installed/);
     expect(
-      within(screen.getByTestId("recipe-a")).getByRole("button", { name: "Remove" }),
+      within(await screen.findByTestId("recipe-a")).getByRole("button", { name: "Remove" }),
     ).toBeTruthy();
   });
 
   it("offers Update when the catalogue has a newer version, and Remove", async () => {
-    const installed = store([entry("a", "1.0.1", { installed: "1.0.0" })]);
     const api = mockApi({
-      [STORE]: { body: installed },
-      [REFRESH]: { body: installed },
-      [UPDATE]: { body: { id: "a", version: "1.0.1" } },
-      [UNINSTALL_A]: { status: 204 },
+      [PLUGINS]: { body: [plugin("a", "1.0.0", { latestVersion: "1.0.1" })] },
+      [STORE]: { body: [] },
+      [REFRESH]: REFRESHED,
+      [UPDATE]: { body: { success: true } },
+      [UNINSTALL_A]: { body: { success: true } },
       [RESOURCES]: { body: resources() },
     });
     render(<PluginsPage />);
     const a = await screen.findByTestId("recipe-a");
+    expect(a.textContent).toContain("1.0.1");
     fireEvent.click(within(a).getByRole("button", { name: "Update" }));
     await screen.findByText("Recipe updated.");
     expect(api.count(UPDATE)).toBe(1);
@@ -166,26 +190,11 @@ describe("PluginsPage", () => {
     expect(api.count(UNINSTALL_A)).toBe(1);
   });
 
-  it("offers Update in the Store tab too, beside the Installed mark", async () => {
-    const newer = store([entry("a", "1.0.1", { installed: "1.0.0" })]);
-    mockApi({
-      [STORE]: { body: newer },
-      [REFRESH]: { body: newer },
-      [RESOURCES]: { body: resources() },
-    });
-    render(<PluginsPage />);
-    await screen.findByTestId("recipe-a");
-    tab(/^Store/);
-    const a = screen.getByTestId("recipe-a");
-    expect(within(a).getByRole("button", { name: "Update" })).toBeTruthy();
-    expect(a.textContent).toContain("Installed");
-    expect(within(a).queryByRole("button", { name: "Install" })).toBeNull();
-  });
-
   it("shows the server's reason when an install is refused", async () => {
     mockApi({
-      [STORE]: { body: store([entry("a", "1.0.0")]) },
-      [REFRESH]: { body: store([entry("a", "1.0.0")]) },
+      [PLUGINS]: { body: [] },
+      [STORE]: { body: [entry("a", "1.0.0")] },
+      [REFRESH]: REFRESHED,
       [INSTALL]: {
         status: 409,
         body: { error: "Not enough memory for a: 700 KB free, 736 KB needed" },
@@ -205,8 +214,9 @@ describe("PluginsPage", () => {
 
   it("offers no upload of a signed recipe", async () => {
     mockApi({
-      [STORE]: { body: store([]) },
-      [REFRESH]: { body: store([]) },
+      [PLUGINS]: { body: [] },
+      [STORE]: { body: [] },
+      [REFRESH]: REFRESHED,
       [RESOURCES]: { body: resources() },
     });
     render(<PluginsPage />);
@@ -215,27 +225,33 @@ describe("PluginsPage", () => {
     expect(screen.queryByLabelText(/signed recipe/i)).toBeNull();
   });
 
-  it("lists an uploaded recipe the catalogue lacks, and removes it", async () => {
+  it("lists a recipe the catalogue lacks as installed, and removes it", async () => {
     const api = mockApi({
-      [STORE]: { body: store([]) },
-      [REFRESH]: { body: store([]) },
-      [RESOURCES]: [{ body: resources([], ["mine"]) }, { body: resources() }],
-      "POST /api/v1/recipes/mine/uninstall": { status: 204 },
+      [PLUGINS]: [{ body: [plugin("mine", "0.1.0")] }, { body: [] }],
+      [STORE]: { body: [] },
+      [REFRESH]: REFRESHED,
+      [RESOURCES]: { body: resources() },
+      "POST /api/v1/plugins/mine/uninstall": { body: { success: true } },
     });
     render(<PluginsPage />);
-    const mine = await screen.findByTestId("refused-mine");
+    const mine = await screen.findByTestId("recipe-mine");
     expect(mine.textContent).toContain("0.1.0");
     remove(mine);
     await screen.findByText("Recipe removed.");
-    expect(api.count("POST /api/v1/recipes/mine/uninstall")).toBe(1);
+    expect(api.count("POST /api/v1/plugins/mine/uninstall")).toBe(1);
   });
 
-  it("lists a refused file with its reason and removes it", async () => {
+  it("lists a refused file with its reason, read from the resources, and removes it", async () => {
     const api = mockApi({
-      [STORE]: { body: store([]) },
-      [REFRESH]: { body: store([]) },
-      [RESOURCES]: [{ body: resources(["bad"]) }, { body: resources() }],
-      [UNINSTALL_BAD]: { status: 204 },
+      [PLUGINS]: { body: [] },
+      [STORE]: { body: [] },
+      [REFRESH]: REFRESHED,
+      [RESOURCES]: [
+        { body: resources(["bad"]) },
+        { body: resources(["bad"]) },
+        { body: resources() },
+      ],
+      [UNINSTALL_BAD]: { body: { success: true } },
     });
     render(<PluginsPage />);
     const bad = await screen.findByTestId("refused-bad");
@@ -246,11 +262,14 @@ describe("PluginsPage", () => {
     await waitFor(() => expect(screen.queryByTestId("refused-bad")).toBeNull());
   });
 
-  it("shows the error of the last read in the Store tab and keeps the list", async () => {
+  it("shows the error of the last read, from the resources, in the Store tab and keeps the list", async () => {
     mockApi({
-      [STORE]: { body: store([entry("a", "1.0.0")], "no route to host") },
-      [REFRESH]: { body: store([entry("a", "1.0.0")], "no route to host") },
-      [RESOURCES]: { body: resources() },
+      [PLUGINS]: { body: [] },
+      [STORE]: { body: [entry("a", "1.0.0")] },
+      [REFRESH]: { body: { count: 1, source: "local" } },
+      [RESOURCES]: {
+        body: resources([], { readAt: "2026-11-27T10:00:00.000Z", error: "no route to host" }),
+      },
     });
     render(<PluginsPage />);
     await screen.findByText("No plugins installed");
@@ -261,29 +280,11 @@ describe("PluginsPage", () => {
     expect(screen.getByTestId("recipe-a")).toBeTruthy();
   });
 
-  it("marks a recipe the program provides itself and offers nothing on it", async () => {
-    const native = store([entry("motion-light", "1.0.0", { builtIn: true })]);
-    mockApi({
-      [STORE]: { body: native },
-      [REFRESH]: { body: native },
-      [RESOURCES]: { body: resources() },
-    });
-    render(<PluginsPage />);
-    await screen.findByText("No plugins installed");
-    tab(/^Store/);
-    const row = await screen.findByTestId("recipe-motion-light");
-    expect(row.textContent).toContain("Provided by Solite");
-    expect(within(row).queryByRole("button")).toBeNull();
-  });
-
   it("searches the list of the active tab by id, name and description", async () => {
-    const both = store([
-      entry("a", "1.0.0", { installed: "1.0.0" }),
-      entry("b", "1.0.0", { installed: "1.0.0", name: "Night light" }),
-    ]);
     mockApi({
-      [STORE]: { body: both },
-      [REFRESH]: { body: both },
+      [PLUGINS]: { body: [plugin("a", "1.0.0"), plugin("b", "1.0.0", { name: "Night light" })] },
+      [STORE]: { body: [entry("a2", "1.0.0"), entry("b2", "1.0.0")] },
+      [REFRESH]: REFRESHED,
       [RESOURCES]: { body: resources() },
     });
     render(<PluginsPage />);
@@ -297,18 +298,18 @@ describe("PluginsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
     expect(screen.getByTestId("recipe-a")).toBeTruthy();
     tab(/^Store/);
-    fireEvent.input(field, { target: { value: "what b" } });
-    expect(screen.queryByTestId("recipe-a")).toBeNull();
-    expect(screen.getByTestId("recipe-b")).toBeTruthy();
+    fireEvent.input(field, { target: { value: "what b2" } });
+    expect(screen.queryByTestId("recipe-a2")).toBeNull();
+    expect(screen.getByTestId("recipe-b2")).toBeTruthy();
   });
 
   it("uninstalls only on the second click of Remove", async () => {
-    const both = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
     const api = mockApi({
-      [STORE]: { body: both },
-      [REFRESH]: { body: both },
+      [PLUGINS]: { body: [plugin("a", "1.0.0")] },
+      [STORE]: { body: [] },
+      [REFRESH]: REFRESHED,
       [RESOURCES]: { body: resources() },
-      [UNINSTALL_A]: { status: 204 },
+      [UNINSTALL_A]: { body: { success: true } },
     });
     render(<PluginsPage />);
     const a = await screen.findByTestId("recipe-a");
@@ -325,18 +326,18 @@ describe("PluginsPage", () => {
     [1, "Confirm? 1 instance will be deleted"],
     [2, "Confirm? 2 instances will be deleted"],
   ])("names the %i instances that a removal deletes", async (count, label) => {
-    const both = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
     const mine = Array.from({ length: count }, (_, n) =>
       recipeInstance(`a${n}`, {}, { recipeId: "a" }),
     );
     mockApi({
-      [STORE]: { body: both },
-      [REFRESH]: { body: both },
+      [PLUGINS]: { body: [plugin("a", "1.0.0")] },
+      [STORE]: { body: [] },
+      [REFRESH]: REFRESHED,
       [RESOURCES]: { body: resources() },
       "GET /api/v1/recipe-instances": {
         body: [...mine, recipeInstance("other", {})],
       },
-      [UNINSTALL_A]: { status: 204 },
+      [UNINSTALL_A]: { body: { success: true } },
     });
     render(<PluginsPage />);
     const a = await screen.findByTestId("recipe-a");
@@ -345,11 +346,11 @@ describe("PluginsPage", () => {
   });
 
   it("says why when the refresh at opening is refused, not that the catalogue is empty", async () => {
-    const never: RecipeStore = { recipes: [], readAt: null, error: null };
     mockApi({
-      [STORE]: { body: never },
+      [PLUGINS]: { body: [] },
+      [STORE]: { body: [] },
       [REFRESH]: { status: 503, body: { error: "Not enough memory for the catalogue" } },
-      [RESOURCES]: { body: resources() },
+      [RESOURCES]: { body: resources([], { readAt: null, error: null }) },
     });
     render(<PluginsPage />);
     expect((await screen.findByRole("alert")).textContent).toContain("Not enough memory");
@@ -358,9 +359,9 @@ describe("PluginsPage", () => {
   });
 
   it("keeps the list silently when the refresh is paced (429)", async () => {
-    const held = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
     mockApi({
-      [STORE]: { body: held },
+      [PLUGINS]: { body: [plugin("a", "1.0.0")] },
+      [STORE]: { body: [] },
       [REFRESH]: { status: 429, body: { error: "Too soon" } },
       [RESOURCES]: { body: resources() },
     });
@@ -370,10 +371,13 @@ describe("PluginsPage", () => {
   });
 
   it("clears the error of the first read when the refresh succeeds", async () => {
-    const ok = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
     mockApi({
-      [STORE]: { status: 500, body: { error: "Held list unreadable" } },
-      [REFRESH]: { body: ok },
+      [PLUGINS]: [
+        { status: 500, body: { error: "Held list unreadable" } },
+        { body: [plugin("a", "1.0.0")] },
+      ],
+      [STORE]: { body: [] },
+      [REFRESH]: REFRESHED,
       [RESOURCES]: { body: resources() },
     });
     render(<PluginsPage />);
@@ -382,13 +386,18 @@ describe("PluginsPage", () => {
   });
 
   it("feeds the sidebar's badge: an Update takes the count down", async () => {
-    const before = store([entry("a", "2.0.0", { installed: "1.0.0" })]);
-    const after = store([entry("a", "2.0.0", { installed: "2.0.0" })]);
+    const before = plugin("a", "1.0.0", { latestVersion: "2.0.0" });
     mockApi({
-      [STORE]: [{ body: before }, { body: before }, { body: after }],
-      [REFRESH]: { body: before },
+      [PLUGINS]: [
+        { body: [before] },
+        { body: [before] },
+        { body: [before] },
+        { body: [plugin("a", "2.0.0")] },
+      ],
+      [STORE]: { body: [] },
+      [REFRESH]: REFRESHED,
       [RESOURCES]: { body: resources() },
-      [UPDATE]: { status: 204 },
+      [UPDATE]: { body: { success: true } },
     });
     render(
       <>

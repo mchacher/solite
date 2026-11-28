@@ -6,7 +6,8 @@ use super::Home;
 use crate::devices::format_iso;
 use crate::failure::Failure;
 use crate::memory::{
-    InternalResources, PsramResources, Resources, ScriptResources, StorageResources,
+    CatalogueResources, InternalResources, PsramResources, Resources, ScriptResources,
+    StorageResources,
 };
 use crate::recipes::install::catalogue::{DEFAULT_CATALOGUE_URL, Entry};
 use crate::recipes::install::{
@@ -15,24 +16,82 @@ use crate::recipes::install::{
 };
 use crate::settings;
 
-/// One entry of `GET /recipes/store`: the catalogue's entry and what the box adds to it.
+/// The manifest of a package, Sowel's `PluginManifest` (`src/shared/types.ts`), as a recipe has it.
+/// Written field by field into the answer's body (no value tree).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StoreEntry<'a> {
-    #[serde(flatten)]
-    entry: &'a Entry,
-    installed: Option<String>,
-    refused: Option<&'a str>,
-    built_in: bool,
+struct Manifest<'a> {
+    id: String,
+    name: String,
+    version: String,
+    description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon: Option<String>,
+    repo: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author: Option<&'a str>,
 }
 
-/// The answer of `GET /recipes/store`, borrowed from the home.
+/// One entry of `GET /plugins`, Sowel's `PluginInfo`.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StoreView<'a> {
-    recipes: Vec<StoreEntry<'a>>,
-    read_at: Option<String>,
-    error: Option<&'a str>,
+pub struct PluginInfoView<'a> {
+    manifest: Manifest<'a>,
+    enabled: bool,
+    /// ISO 8601; `null` when the box does not know (no clock at install, or the box restarted).
+    installed_at: Option<String>,
+    status: &'static str,
+    device_count: u32,
+    offline_device_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_version: Option<&'a str>,
+    source: &'static str,
+}
+
+/// One entry of `GET /plugins/store`, Sowel's `StoreEntry` (`PluginManifest` and the store's
+/// fields).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreEntryView<'a> {
+    id: &'a str,
+    name: &'a str,
+    version: &'a str,
+    description: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon: Option<&'a str>,
+    repo: &'a str,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author: Option<&'a str>,
+    compatible: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compat_reason: Option<String>,
+    is_official: bool,
+    tier: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    i18n: Option<&'a serde_json::value::RawValue>,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    tags: &'a [String],
+}
+
+/// What a script recipe's definition says of itself (the fields of a `PluginManifest` it can
+/// fill).
+#[cfg(feature = "script-recipes")]
+#[derive(serde::Deserialize)]
+struct Definition {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    icon: Option<String>,
 }
 
 /// The unit of the figures in the messages: KiB, the needed rounded up and the free rounded down.
@@ -111,6 +170,11 @@ impl Home {
             .cloned()
     }
 
+    /// How many entries the held catalogue lists.
+    pub(crate) fn catalogue_count(&self) -> usize {
+        self.install.catalogue.entries().len()
+    }
+
     /// True when a catalogue read is held (even an empty list).
     pub(crate) fn catalogue_held(&self) -> bool {
         self.install.catalogue.read_at.is_some()
@@ -127,30 +191,138 @@ impl Home {
         }
     }
 
-    /// `GET /recipes/store` (R2.3): what the box holds, never the network. Serialised straight
-    /// into the answer's body, no value tree.
-    pub fn recipe_store(&self) -> StoreView<'_> {
-        let state = &self.install;
-        let recipes = state
+    /// The catalogue's entry for a `repo`, if one is held.
+    pub(crate) fn catalogue_entry_of_repo(&self, repo: &str) -> Option<Entry> {
+        self.install
             .catalogue
             .entries()
             .iter()
-            .map(|entry| StoreEntry {
-                entry,
-                installed: self.installed_text(&entry.id),
-                refused: state
-                    .refused
-                    .iter()
-                    .find(|refused| refused.id == entry.id)
-                    .map(|refused| refused.reason.as_str()),
-                built_in: self.is_built_in_recipe(&entry.id),
-            })
-            .collect();
-        StoreView {
-            recipes,
-            read_at: state.catalogue.read_at.map(format_iso),
-            error: state.catalogue.error.as_deref(),
+            .find(|entry| entry.repo == repo)
+            .cloned()
+    }
+
+    /// `GET /plugins` (R1): the script recipes the box runs, built-in scripts included, as
+    /// Sowel's `PluginInfo`. What the box holds, never the network. Serialised straight into the
+    /// answer's body, no value tree.
+    #[cfg(feature = "script-recipes")]
+    pub fn installed_plugins(&self) -> Vec<PluginInfoView<'_>> {
+        let entries = self.install.catalogue.entries();
+        let mut out = Vec::new();
+        for row in self.recipes.script_rows() {
+            if row.failed.is_some() {
+                continue;
+            }
+            let Some(text) = self.recipes.recipe_info_text(&row.id) else {
+                continue;
+            };
+            let Ok(definition) = serde_json::from_str::<Definition>(&text) else {
+                continue;
+            };
+            let entry = entries.iter().find(|entry| entry.id == row.id);
+            let installed = self.recipes.installed_version(&row.id);
+            let latest = entry.filter(|entry| match (installed, entry.version()) {
+                (Some(old), Some(new)) => new > old,
+                _ => false,
+            });
+            out.push(PluginInfoView {
+                installed_at: self
+                    .install
+                    .installed_at
+                    .get(&row.id)
+                    .copied()
+                    .map(format_iso),
+                manifest: Manifest {
+                    version: installed
+                        .map(|v| v.to_string())
+                        .or(row.version)
+                        .unwrap_or_default(),
+                    name: definition.name,
+                    description: definition.description,
+                    icon: entry.and_then(|e| e.icon.clone()).or(definition.icon),
+                    repo: entry
+                        .map_or_else(|| format!("solite-recipes/{}", row.id), |e| e.repo.clone()),
+                    kind: "recipe",
+                    category: entry.and_then(|e| e.category.as_deref()),
+                    author: entry.and_then(|e| e.author.as_deref()),
+                    id: row.id,
+                },
+                enabled: true,
+                status: "connected",
+                device_count: 0,
+                offline_device_count: 0,
+                latest_version: latest.map(|e| e.version.as_str()),
+                source: "registry",
+            });
         }
+        out
+    }
+
+    #[cfg(not(feature = "script-recipes"))]
+    pub fn installed_plugins(&self) -> Vec<PluginInfoView<'_>> {
+        Vec::new()
+    }
+
+    /// `GET /plugins/store` (R2): the catalogue's entries that are not installed, as Sowel's
+    /// `getStore`. Serialised straight into the answer's body.
+    pub fn store_entries(&self) -> Vec<StoreEntryView<'_>> {
+        let firmware = crate::update::Version::parse(crate::VERSION);
+        self.install
+            .catalogue
+            .entries()
+            .iter()
+            .filter(|entry| {
+                self.installed_text(&entry.id).is_none() && !self.is_built_in_recipe(&entry.id)
+            })
+            .map(|entry| {
+                let incompatible = match (entry.min_version(), firmware) {
+                    (Some(min), Some(now)) => min > now,
+                    _ => false,
+                };
+                StoreEntryView {
+                    id: &entry.id,
+                    name: &entry.name,
+                    version: &entry.version,
+                    description: &entry.description,
+                    icon: entry.icon.as_deref(),
+                    repo: &entry.repo,
+                    kind: "recipe",
+                    category: entry.category.as_deref(),
+                    author: entry.author.as_deref(),
+                    compatible: !incompatible,
+                    compat_reason: incompatible.then(|| {
+                        format!(
+                            "Requires Solite >= {}",
+                            entry.min_version.as_deref().unwrap_or("")
+                        )
+                    }),
+                    is_official: true,
+                    tier: "official",
+                    i18n: entry.i18n.as_deref(),
+                    tags: &entry.tags,
+                }
+            })
+            .collect()
+    }
+
+    /// The catalogue's figures for `GET /system/resources`: when it was read, and why the last
+    /// read failed.
+    pub fn catalogue_report(&self) -> (Option<String>, Option<&str>) {
+        let state = &self.install.catalogue;
+        (state.read_at.map(format_iso), state.error.as_deref())
+    }
+
+    /// The time a recipe was installed, kept while the box runs (R1): only when the clock is set.
+    pub(crate) fn note_installed(&mut self, id: &str, wall: u64) {
+        if wall >= crate::home::CLOCK_SET_AFTER_MS {
+            self.install
+                .installed_at
+                .entry(id.to_string())
+                .or_insert(wall);
+        }
+    }
+
+    pub(crate) fn forget_installed(&mut self, id: &str) {
+        self.install.installed_at.remove(id);
     }
 
     #[cfg(feature = "script-recipes")]
@@ -239,6 +411,13 @@ impl Home {
             psram,
             storage: self.install.storage,
             scripts: self.script_resources(),
+            catalogue: {
+                let (read_at, error) = self.catalogue_report();
+                CatalogueResources {
+                    read_at,
+                    error: error.map(str::to_string),
+                }
+            },
         }
     }
 

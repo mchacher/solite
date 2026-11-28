@@ -157,8 +157,8 @@ describe("SettingsPage, Home card", () => {
   });
 });
 
-const GET = "GET /api/v1/system/backup";
-const POST = "POST /api/v1/system/backup";
+const GET = "GET /api/v1/backup";
+const POST = "POST /api/v1/backup";
 const PASSWORD = "correct horse";
 
 const exportButton = () => screen.getByRole("button", { name: /^Export/ }) as HTMLButtonElement;
@@ -293,7 +293,7 @@ describe("SettingsPage, Backup card", () => {
     const api = await setup(
       {},
       {
-        "POST /api/v1/system/backup?wifi=true": {
+        "POST /api/v1/backup?wifi=true": {
           body: { success: true, message: "Backup restored", files: 6, wifi: true },
         },
       },
@@ -306,7 +306,7 @@ describe("SettingsPage, Backup card", () => {
     expect(within(dialog).getByText("The Wi-Fi settings are replaced too.")).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Restore" }));
     expect(await screen.findByText("Backup restored")).toBeTruthy();
-    expect(api.count("POST /api/v1/system/backup?wifi=true")).toBe(1);
+    expect(api.count("POST /api/v1/backup?wifi=true")).toBe(1);
     expect(api.count(POST)).toBe(0);
   });
 
