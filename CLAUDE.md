@@ -68,12 +68,15 @@ sh scripts/box.sh pair                           # opens Zigbee pairing 180 s, r
 sh scripts/box-session.sh --yes-flash --backup <file> | --api-only <port>  # the box session in one pass (the user types it, D55) | its API checks on the Mac
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (radio image: README)
 sh scripts/release.sh <x.y.z> --key-file <file>   # a signed release, locally (the CI's release.yml does it on a tag; needs release/recipe-key.pub; script recipes: `solite-host --recipe-sign|--recipe-verify`)
+sh scripts/validate.sh --changed | --pre-merge   # while developing: the touched groups' quick tests | before the merge: scaled to the change (docs, normal, critical = full with QEMU)
 sh scripts/validate.sh [--fast] [--skip-slow] [--only rust|ui|firmware|e2e]  # the verdict; --fast: pre-commit hook; --only: a third (CI jobs), e2e opt-in; --skip-slow: no slow test, no QEMU (PR CI; nightly: full)
 sh scripts/quiet.sh <command>                    # ALWAYS for long output: log file, one verdict line
 ```
 
 `sh scripts/validate.sh` is the verdict: docs, format, lint, types, the Sowel contract, tests, UI size budget, the four
-ESP32 firmware images and the engine's run in QEMU. It must be green before any commit. After a
+ESP32 firmware images and the engine's run in QEMU. **Tests by stage** (D87): while developing,
+targeted tests and `--changed`; before the merge, `--pre-merge` (the pull request's CI runs it,
+scaled by `scripts/scope.sh`); the full run on main every night and before a box session. After a
 fresh clone: `git config core.hooksPath .githooks` (Claude's commit hook also sets it). **Never
 flash the Dongle Max** without the user's explicit yes (their own `--yes-flash` on `box-session.sh`, typed
 by them, is one, for that run; never add the flag yourself): its original firmware exposes the radio
@@ -100,7 +103,7 @@ over TCP for development (decision D6).
 - **Git**: never commit to `main` except trivial fixes (the hook asks the user to confirm);
   branches `feat/`, `fix/`, `docs/`, `chore/`; conventional commits in English, scopes in
   `.claude/skills/solite-feature/reference.md`; remote `origin` on GitHub, pull requests
-  with `gh pr create`, CI runs `sh scripts/validate.sh`, `--skip-slow` on pull requests, in full every night (D9, D34); **no AI attribution line** (no
+  with `gh pr create`, CI runs `sh scripts/validate.sh`, `--pre-merge` on pull requests, in full every night (D9, D34, D87); **no AI attribution line** (no
   `Co-Authored-By`, no "Generated with"); never push, merge or publish without the user's explicit
   yes.
 - **Agents (strict, read [docs/agents.md](docs/agents.md))**: Sonnet in the session, Opus only for

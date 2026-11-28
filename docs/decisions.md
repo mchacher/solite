@@ -1760,3 +1760,22 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   spec 056's part 2).
 - **Measured**: QEMU, 50 devices and 3 recipes: internal free after the engine's load 233 KB
   (min 135) at 4096, 276 KB (min 166) at 512. The box's figures: spec 056's result.
+
+## D87: Tests by stage, scaled to the change
+
+- **Date**: 2026-11-28
+- **Context**: on 2026-11-28 the full verdict (10 to 13 minutes, QEMU included) ran about twelve
+  times on the Mac, the run without the slow checks (4 to 5 minutes) about ten times, and each QEMU
+  probe cost 4 minutes of emulation: most of a change's time went to checks that its files could
+  not fail. The pull request's CI (5 to 6 minutes, three jobs side by side) was not the cost.
+- **Choice**: three stages. While developing: targeted tests, then `validate.sh --changed` (the quick
+  checks and the tests of the touched groups; no firmware build, no QEMU). Before the merge:
+  `validate.sh --pre-merge`, run by the pull request's CI, scaled by `scripts/scope.sh` from the
+  change's files: docs only, the quick checks; normal, the touched groups without the slow checks;
+  critical (firmware, memory tests, update, backup, radio, storage, recipe installs and scripts,
+  dependencies, CI and release scripts), the touched groups in full, QEMU included. main (`--skip-slow`)
+  and the nightly run (full) keep every group, the net for what the scope misses; the full run also
+  comes before a box session. The git hook stays `--fast`; Claude's commit hook runs `--changed`
+  (it ran `--skip-slow`, about 5 minutes and four firmware builds per commit).
+- **Rejected**: the full verdict before every commit (D9's first form): its cost grew with the
+  firmware images and QEMU until it set the pace of the work.

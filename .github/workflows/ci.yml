@@ -1,6 +1,6 @@
 # The verdict of CLAUDE.md: sh scripts/validate.sh, cut into three jobs that run side by side
 # (`--only rust`, `--only ui`, `--only firmware`): together they are exactly the full run, and the
-# slowest one sets the time. Pull requests and pushes to main run it with `--skip-slow` (no slow
+# slowest one sets the time. Pull requests run it scaled to their files (`--pre-merge`); pushes to main with `--skip-slow` (no slow
 # Rust test, no QEMU run); every night, and by hand (Run workflow), the full verdict runs on main.
 name: CI
 
@@ -22,6 +22,10 @@ concurrency:
 env:
   # Empty for the nightly and manual runs (the full verdict), `--skip-slow` otherwise.
   SKIP_SLOW: ${{ (github.event_name != 'schedule' && github.event_name != 'workflow_dispatch') && '--skip-slow' || '' }}
+  # A pull request runs the verdict scaled to its files (`validate.sh --pre-merge`, `scripts/scope.sh`):
+  # a group it does not touch is skipped, a critical path runs in full with QEMU. main and the
+  # nightly run every group.
+  SCOPE: ${{ github.event_name == 'pull_request' && format('--pre-merge --base origin/{0}', github.base_ref) || '' }}
 
 jobs:
   rust:
@@ -30,6 +34,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Rust, at the version pinned in rust-toolchain.toml
         run: rustup toolchain install
@@ -42,7 +48,7 @@ jobs:
           shared-key: rust
 
       - name: Validate
-        run: sh scripts/validate.sh --only rust $SKIP_SLOW
+        run: sh scripts/validate.sh --only rust ${SCOPE:-$SKIP_SLOW}
 
   ui:
     name: validate (ui)
@@ -50,6 +56,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -68,7 +76,7 @@ jobs:
         run: npm ci
 
       - name: Validate
-        run: sh scripts/validate.sh --only ui $SKIP_SLOW
+        run: sh scripts/validate.sh --only ui ${SCOPE:-$SKIP_SLOW}
 
   firmware:
     name: validate (firmware)
@@ -78,12 +86,14 @@ jobs:
       ESPUP_VERSION: v0.19.0
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: System packages for ESP-IDF
         run: sudo apt-get update && sudo apt-get install -y ninja-build python3-venv
 
       - name: System libraries for QEMU
-        if: env.SKIP_SLOW == ''
+        if: env.SKIP_SLOW == '' || github.event_name == 'pull_request'
         run: sudo apt-get install -y libgcrypt20 libglib2.0-0 libpixman-1-0 libsdl2-2.0-0 libslirp0
 
       - name: Rust, at the version pinned in rust-toolchain.toml
@@ -145,11 +155,11 @@ jobs:
       # it would be downloaded on every run. On a miss, scripts/qemu.sh installs it (after the
       # firmware build has downloaded ESP-IDF, which the installer needs) and this step saves it.
       - name: QEMU download cache
-        if: env.SKIP_SLOW == ''
+        if: env.SKIP_SLOW == '' || github.event_name == 'pull_request'
         uses: actions/cache@v4
         with:
           path: firmware/.embuild/espressif/tools/qemu-xtensa
           key: qemu-xtensa-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}
 
       - name: Validate
-        run: sh scripts/validate.sh --only firmware $SKIP_SLOW
+        run: sh scripts/validate.sh --only firmware ${SCOPE:-$SKIP_SLOW}

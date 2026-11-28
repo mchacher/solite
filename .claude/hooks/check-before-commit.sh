@@ -1,8 +1,9 @@
 #!/bin/sh
 # Claude Code hook (PreToolUse on Bash), declared in .claude/settings.json.
-# Before any `git commit` run by Claude: no AI attribution, validate command green (--skip-slow: the
-# slow tests and QEMU run on the Mac before a pull request and in the nightly CI), and a commit on
-# main only with the user's yes (trivial fixes).
+# Before any `git commit` run by Claude: no AI attribution, validate command green (--changed: the
+# quick checks and the tests of the groups the change touches; the firmware, the slow tests and
+# QEMU run before the merge, scaled to the change, and every night: D87), and a commit on main only
+# with the user's yes (trivial fixes).
 # Exit 2 blocks the command and shows the message to Claude, which must fix the cause.
 
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
@@ -28,7 +29,7 @@ case "$cmd" in
     exit 2 ;;
 esac
 
-if ! out=$(sh scripts/validate.sh --skip-slow 2>&1); then
+if ! out=$(sh scripts/validate.sh --changed 2>&1); then
   echo "Blocked: the validate command fails. Fix the cause, never the check. Last lines:" >&2
   echo "$out" | tail -n 30 >&2
   exit 2

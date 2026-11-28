@@ -90,7 +90,7 @@ Models (table in `CLAUDE.md`): stay on Sonnet; a fix that needs a design decisio
 4. If the bug revealed something the living spec did not say, add it to `docs/living-spec/`. Then
    correct what the fix makes false elsewhere, with the search of the feature skill (3.4), on the
    names the fix touches.
-5. Run the new test: it passes. Run `sh scripts/validate.sh`: everything green. Never weaken a
+5. Run the new test: it passes. Run `sh scripts/validate.sh --pre-merge`: everything green (D87). Never weaken a
    check or remove a test to get there.
 
 > **GATE 3**: all true before going on:
