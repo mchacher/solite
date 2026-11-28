@@ -57,6 +57,7 @@ use super::{
     SimTransport, WaitedClock, Watched, fill, measure, memory, wall_ms,
 };
 use crate::job_thread::{self, FETCH_STACK_BYTES, StackPlace};
+use crate::script_alloc::StudyRuntimes;
 use crate::scripts::{self, SCRIPT_THREAD_STACK_BYTES};
 
 /// QEMU's emulated CPU runs the engine far slower than the box's (the first load of a script, which
@@ -75,6 +76,57 @@ const DEPTH_SCRIPT: &str = include_str!("../fixtures/depth-host.js");
 /// The realistic home's zone and first light (`fixtures/recipes.json`): the depth script's slots.
 const ZONE: &str = "00000191-5a5a-4a5a-9a5a-5a5a5a5a5a5a";
 const LIGHT: &str = "000002ab-5a5a-4a5a-9a5a-5a5a5a5a5a5a";
+
+/// The measuring code of spec 057, shared with `crates/core/tests/engine_layouts.rs`.
+#[allow(dead_code)]
+mod study {
+    include!("../../crates/core/tests/fixtures/engine_study.rs");
+}
+
+const STUDY_SHIM: &str = include_str!("../../crates/core/src/recipes/script/shim.js");
+const STATE_WATCH_SOURCE: &str = include_str!("../../recipes/scripts/state-watch.js");
+const STATE_TRIGGER_SOURCE: &str = include_str!("../../recipes/scripts/state-trigger-light.js");
+
+/// The engine study (spec 057): QuickJS's count after each part of the fixed cost and for the
+/// three layouts of four recipes, on a `script` job thread, through the PSRAM allocator. Logs
+/// `engine study: <part or layout> <bytes> (...)` lines; a failure is a line, never the run's.
+fn engine_study() {
+    use solite_core::recipes::script::ScriptRuntimes;
+    let make = || -> Result<study::Made, String> {
+        let made = StudyRuntimes.new_runtime()?;
+        made.runtime.set_max_stack_size(16 * 1024);
+        Ok(study::Made {
+            runtime: made.runtime,
+            held: made.held,
+        })
+    };
+    let four = [
+        (MOTION_SCRIPT, MOTION_SCRIPT_SOURCE),
+        ("state-watch", STATE_WATCH_SOURCE),
+        ("state-trigger-light", STATE_TRIGGER_SOURCE),
+        (SCHEDULE_SCRIPT, SCHEDULE_SCRIPT_SOURCE),
+    ];
+    let mut emit = |name: &str, fig: &study::Fig| log::info!("engine study: {name} {}", fig.text());
+    if let Err(e) = study::parts(&make, STUDY_SHIM, MOTION_SCRIPT_SOURCE, &mut emit) {
+        log::warn!("engine study: parts failed: {e}");
+    }
+    match study::layout_runtimes(&make, STUDY_SHIM, &four, &mut emit) {
+        Ok(notes) => log::info!("engine study: one runtime each, notes {notes:?}"),
+        Err(e) => log::warn!("engine study: one runtime each failed: {e}"),
+    }
+    match study::layout_contexts(&make, STUDY_SHIM, &four, &mut emit) {
+        Ok(notes) => log::info!("engine study: a context each, notes {notes:?}"),
+        Err(e) => log::warn!("engine study: a context each failed: {e}"),
+    }
+    match study::layout_shared(&make, STUDY_SHIM, &four, &mut emit) {
+        Ok(shared) => {
+            for s in &shared {
+                log::info!("engine study: shared {}: {:?}", s.name, s.reason);
+            }
+        }
+        Err(e) => log::warn!("engine study: shared failed: {e}"),
+    }
+}
 
 /// Plays the realistic scenario again on the home as it is, as the first run did (the radio is a
 /// new simulated one; the saves are run and dropped).
@@ -631,6 +683,16 @@ pub fn run(
     );
     for line in scripts::lines_of(&lock(home)) {
         log::info!("{line}");
+    }
+
+    // The engine study (spec 057), on a `script` thread: before the last line the run waits for.
+    if let Err(e) = job_thread::run_borrowed(
+        c"script",
+        SCRIPT_THREAD_STACK_BYTES,
+        StackPlace::Psram,
+        &mut engine_study,
+    ) {
+        log::warn!("engine study: {e}");
     }
 
     // 5. A script at the source bound (32 KB), with as many instances: a third script recipe

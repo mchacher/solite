@@ -132,3 +132,7 @@ required-features = ["script-recipes"]
 [[test]]
 name = "live"
 required-features = ["script-recipes"]
+
+[[test]]
+name = "engine_layouts"
+required-features = ["script-recipes"]
