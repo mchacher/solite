@@ -220,7 +220,7 @@ pub(super) struct Parts {
     pub limit: usize,
     pub refused: Option<RefusedFlag>,
     pub held: Option<HeldCounter>,
-    pub info: serde_json::Value,
+    pub info: String,
     pub defs: Vec<SlotDef>,
     pub has_validate: bool,
 }
@@ -308,7 +308,7 @@ impl ScriptRecipe {
             limit: parts.limit,
             refused: parts.refused,
             held: parts.held,
-            info: parts.info.to_string(),
+            info: parts.info,
             defs: parts.defs,
             has_validate: parts.has_validate,
             instances: Vec::new(),
@@ -662,6 +662,10 @@ impl Recipe for ScriptRecipe {
 
     fn info(&self) -> serde_json::Value {
         serde_json::from_str(&self.info).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn info_text(&self) -> String {
+        self.info.clone()
     }
 
     fn validate(&self, host: &dyn Host, params: &serde_json::Value) -> Result<(), RecipeError> {

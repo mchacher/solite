@@ -95,7 +95,7 @@ never taken by an allocation that may go to PSRAM.
 | The worst overlap of the job threads' stacks: an automatic check or pull (20 KB), an upload (16 KB) and a backup (10 KB) at once, each answered by its own thread (the `script` and `recipe` threads are permanent, counted on their own lines above) | 20 + 16 + 10 KB = 46 KB of the 121 KB left (a pull and an upload exclude each other, 409, so the worst case that can happen is a pull or an upload with a backup: 35 KB); the automatic check, an upload and a backup are the worst overlap allowed | E, from the settings |
 | mbedTLS, its small internal allocations | 8 KB | E |
 | QuickJS's static data in the radio image (spec 041): linked in, it takes 12 KB of internal RAM from the boot (347 KB free in the script build against 359 KB in the box's image) | 12 KB | M, QEMU (2026-11-26) |
-| The script recipes' small blocks on the Rust side (spec 041): a loaded script recipe keeps its info as one JSON text, an instance its slots' ids, its state and its motion sensors (no copy of its listen set: the engine holds it); every block of 512 bytes or less goes to the internal RAM (4 KB or less before spec 056) | About 4 KB per loaded script recipe (30 KB before, its info kept twice as `Value` trees), 3 to 5 KB per instance (5 to 6.5 KB before); `MAX_INSTANCES` (16, all recipes) script instances would hold up to about 80 KB, **not added**: the measured figures below are the reading, and past the reserve the small blocks spill into PSRAM | M, QEMU with a counting allocator (2026-11-26) |
+| The script recipes' small blocks on the Rust side (spec 041): a loaded script recipe keeps its info as one JSON text, an instance its slots' ids, its state and its motion sensors (no copy of its listen set: the engine holds it); every block of 512 bytes or less goes to the internal RAM (4 KB or less before spec 056) | About 4 KB per loaded script recipe (30 KB before, its info kept twice as `Value` trees; a text only since the definition's trees are no longer built at load or served, below), 3 to 5 KB per instance (5 to 6.5 KB before); `MAX_INSTANCES` (16, all recipes) script instances would hold up to about 80 KB, **not added**: the measured figures below are the reading, and past the reserve the small blocks spill into PSRAM | M, QEMU with a counting allocator (2026-11-26) |
 | Left for the engine's small allocations and the rest, before the reserve | 359 − 70 − 64 − 8 − 12 − 20 = 185 KB | |
 | Reserve kept for DMA and the network stack | 64 KB | settings |
 | **Left for the engine's small allocations** | 185 − 64 = **121 KB**, pessimistic by up to 64 KB: Wi-Fi's own internal allocations (the 70 KB above) draw from the reserve, so the reserve and the network line are partly counted twice | |
@@ -262,4 +262,15 @@ The box (0.3.0, threshold 4096, 4 recipes, 1 instance), read on 2026-11-28 from 
 | Lowest after the removal | 205,963 / 170,667 B | 254,371 / 231,955 B |
 
 The box's own figures (installs, updates and removals of 4 recipes) are in spec 056's result.
+
+`schedule-on-off` (20 slots, texts in two languages, 7.9 KB of JSON; `motion-light` has 7 slots, 2.6 KB)
+took 94 KB of the internal RAM at its load: the definition read into `serde_json::Value` trees (49 KB),
+the `RecipeInfo` built as a second tree (43 KB more), then parsed again when the recipe was
+registered (42 KB), every node a block of 512 bytes or less. The definition is now read slot by slot
+(`RawValue`), the info is written as JSON text one slot at a time, and the registration and
+`GET /recipes` read or serve that text (the id, the name and the equipment slots are read with small
+typed structs). QEMU, the install of `schedule-on-off` alone: load step's lowest free internal RAM
+258,311 to 164,243 B before (94 KB), 258,311 to 237,579 B after (21 KB). The install step of the QEMU
+run now installs both `motion-light` and `schedule-on-off` (internal RAM dip over the whole install,
+catalogue and download included: 45 KB and 42 KB) and `validate.sh` refuses a dip over 60 KB.
 Every step of a recipe job logs `recipe install: <step> internal <free>/<lowest>` (the lowest since boot on the box; in QEMU the figures are per-phase minima, the run restarting ESP-IDF's local-minimum monitor at each phase).

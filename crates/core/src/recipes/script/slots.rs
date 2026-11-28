@@ -3,6 +3,7 @@
 //! params (Solite's own texts, since Sowel has no generic slot validation), and what a script
 //! gets of the params once they passed: durations in milliseconds, equipments as ids.
 
+use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 use solite_recipe_sdk::duration::{js_number, js_string, parse_duration};
 use solite_recipe_sdk::{Host, canonical_id};
@@ -108,14 +109,30 @@ fn valid_slot_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// Reads the slots a script declared, `(id, definition)` in declaration order. The slot `zone` is
-/// added first when the script does not declare it. The reason when one is refused.
-pub fn parse_slots(declared: &[(String, Value)]) -> Result<Vec<SlotDef>, String> {
-    if declared.len() > MAX_SLOTS {
+/// The slots a script declared, from their JSON text: each one is read into a tree, turned
+/// into a `SlotDef` and dropped before the next is read. The trees of 30 slots together are most
+/// of the memory the load takes, in small blocks that the ESP32 keeps in its internal RAM.
+pub fn parse_slots_raw(declared: &[(String, Box<RawValue>)]) -> Result<Vec<SlotDef>, String> {
+    parse_slot_list(
+        declared.len(),
+        declared.iter().map(|(id, raw)| {
+            let tree: Value = serde_json::from_str(raw.get())
+                .map_err(|e| format!("slot {id}: a definition is expected ({e})"))?;
+            Ok((id.as_str(), tree))
+        }),
+    )
+}
+
+fn parse_slot_list<'a>(
+    count: usize,
+    declared: impl Iterator<Item = Result<(&'a str, Value), String>>,
+) -> Result<Vec<SlotDef>, String> {
+    if count > MAX_SLOTS {
         return Err(format!("more than {MAX_SLOTS} slots"));
     }
     let mut defs: Vec<SlotDef> = Vec::new();
-    for (id, raw) in declared {
+    for item in declared {
+        let (id, raw) = item?;
         if !valid_slot_id(id) {
             return Err(format!(
                 "slot \"{id}\": the id is 1 to 64 characters among letters, digits, _ and -"
@@ -204,7 +221,7 @@ pub fn parse_slots(declared: &[(String, Value)]) -> Result<Vec<SlotDef>, String>
             Some(_) => return Err(bad("hiddenWhen is {slot, equals}")),
         };
         defs.push(SlotDef {
-            id: id.clone(),
+            id: id.to_string(),
             name,
             description,
             kind,
@@ -269,60 +286,69 @@ fn number_value(n: f64) -> Value {
     }
 }
 
-/// The slots as `RecipeInfo.slots` serves them (Sowel's `RecipeSlotDef`), in declaration order.
-pub fn info_slots(defs: &[SlotDef]) -> Value {
-    Value::Array(
-        defs.iter()
-            .map(|def| {
-                let mut slot = Map::new();
-                slot.insert("id".into(), json!(def.id));
-                slot.insert("name".into(), json!(def.name));
-                slot.insert("description".into(), json!(def.description));
-                slot.insert("type".into(), json!(def.kind.name()));
-                slot.insert("required".into(), json!(def.required));
-                if def.list {
-                    slot.insert("list".into(), json!(true));
-                }
-                if let Some(default) = &def.default {
-                    slot.insert("defaultValue".into(), default.clone());
-                }
-                if !def.options.is_empty() {
-                    let options: Vec<Value> = def
-                        .options
-                        .iter()
-                        .map(|(value, label)| json!({"value": value, "label": label}))
-                        .collect();
-                    slot.insert("options".into(), Value::Array(options));
-                }
-                let mut constraints = Map::new();
-                if let Some(types) = &def.equipment_type_value {
-                    constraints.insert("equipmentType".into(), types.clone());
-                }
-                if let Some(min) = def.min {
-                    constraints.insert("min".into(), number_value(min));
-                }
-                if let Some(max) = def.max {
-                    constraints.insert("max".into(), number_value(max));
-                }
-                if def.cross_zone {
-                    constraints.insert("crossZone".into(), json!(true));
-                }
-                if def.include_descendants {
-                    constraints.insert("includeDescendants".into(), json!(true));
-                }
-                if !constraints.is_empty() {
-                    slot.insert("constraints".into(), Value::Object(constraints));
-                }
-                if let Some(group) = &def.group {
-                    slot.insert("group".into(), json!(group));
-                }
-                if let Some(rule) = &def.hidden_when {
-                    slot.insert("hiddenWhen".into(), (**rule).clone());
-                }
-                Value::Object(slot)
-            })
-            .collect(),
-    )
+/// One slot as `RecipeInfo.slots` serves it (Sowel's `RecipeSlotDef`).
+fn slot_info(def: &SlotDef) -> Value {
+    let mut slot = Map::new();
+    slot.insert("id".into(), json!(def.id));
+    slot.insert("name".into(), json!(def.name));
+    slot.insert("description".into(), json!(def.description));
+    slot.insert("type".into(), json!(def.kind.name()));
+    slot.insert("required".into(), json!(def.required));
+    if def.list {
+        slot.insert("list".into(), json!(true));
+    }
+    if let Some(default) = &def.default {
+        slot.insert("defaultValue".into(), default.clone());
+    }
+    if !def.options.is_empty() {
+        let options: Vec<Value> = def
+            .options
+            .iter()
+            .map(|(value, label)| json!({"value": value, "label": label}))
+            .collect();
+        slot.insert("options".into(), Value::Array(options));
+    }
+    let mut constraints = Map::new();
+    if let Some(types) = &def.equipment_type_value {
+        constraints.insert("equipmentType".into(), types.clone());
+    }
+    if let Some(min) = def.min {
+        constraints.insert("min".into(), number_value(min));
+    }
+    if let Some(max) = def.max {
+        constraints.insert("max".into(), number_value(max));
+    }
+    if def.cross_zone {
+        constraints.insert("crossZone".into(), json!(true));
+    }
+    if def.include_descendants {
+        constraints.insert("includeDescendants".into(), json!(true));
+    }
+    if !constraints.is_empty() {
+        slot.insert("constraints".into(), Value::Object(constraints));
+    }
+    if let Some(group) = &def.group {
+        slot.insert("group".into(), json!(group));
+    }
+    if let Some(rule) = &def.hidden_when {
+        slot.insert("hiddenWhen".into(), (**rule).clone());
+    }
+    Value::Object(slot)
+}
+
+/// The slots as `RecipeInfo.slots` serves them (Sowel's `RecipeSlotDef`), as JSON text in
+/// declaration order, one slot's tree at a time: the trees of every slot together are a big
+/// part of the memory a load takes, in small blocks the ESP32 keeps in its internal RAM.
+pub fn info_slots_text(defs: &[SlotDef]) -> String {
+    let mut text = String::from("[");
+    for (n, def) in defs.iter().enumerate() {
+        if n > 0 {
+            text.push(',');
+        }
+        text.push_str(&slot_info(def).to_string());
+    }
+    text.push(']');
+    text
 }
 
 /// No value given: absent, `null`, `""` or an empty list.

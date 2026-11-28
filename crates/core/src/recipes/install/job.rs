@@ -109,13 +109,16 @@ fn hop<R>(env: &JobEnv<'_>, job: impl FnOnce() -> R) -> Outcome<R> {
     out.ok_or_else(|| Failure::new(500, "Internal error"))
 }
 
-/// The recipe's definition with its `version`, the answer of an install or an update.
-fn recipe_answer(info: Option<serde_json::Value>, version: Version) -> serde_json::Value {
-    let mut info = info.unwrap_or(serde_json::Value::Null);
-    if let serde_json::Value::Object(map) = &mut info {
-        map.insert("version".into(), version.to_string().into());
+/// The recipe's definition with its `version`, the answer of an install or an update. `version`
+/// sorts after every other key of the definition, so it goes last, written into the text.
+fn recipe_answer(info: Option<String>, version: Version) -> Box<serde_json::value::RawValue> {
+    let mut text = info.unwrap_or_else(|| "null".to_string());
+    if text.ends_with('}') {
+        text.pop();
+        text.push_str(&format!(",\"version\":\"{version}\"}}"));
     }
-    info
+    serde_json::value::RawValue::from_string(text)
+        .unwrap_or_else(|_| serde_json::value::RawValue::NULL.to_owned())
 }
 
 /// The figures of the storage, read by the thread that wrote and kept (R5.2).

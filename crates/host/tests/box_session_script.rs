@@ -2722,8 +2722,14 @@ fn recipe_install_check(lines: &str) -> (bool, String) {
 }
 
 fn install_lines(step: &str, unused: &[u32]) -> String {
-    let mut text =
-        format!("I (7000) solite_firmware::simulated::script_phase: script phase: {step}\n");
+    install_lines_with_dip(step, unused, 42)
+}
+
+fn install_lines_with_dip(step: &str, unused: &[u32], dip_kb: u32) -> String {
+    let mut text = format!(
+        "I (6900) solite_firmware::simulated::script_phase: script phase: install schedule-on-off: internal RAM dip {dip_kb} KB\n\
+         I (7000) solite_firmware::simulated::script_phase: script phase: {step}\n"
+    );
     for n in unused {
         text.push_str(&format!(
             "I (7100) solite_firmware::job_thread: recipe: thread stack {n} of 20480 bytes never used\n"
@@ -2763,6 +2769,19 @@ fn the_install_step_needs_its_line_its_statuses_and_a_recipe_thread_stack_of_204
         &[6000],
     ));
     assert!(!ok);
+    // The internal RAM dip of schedule-on-off's install: 60 KB passes, 61 fails, none fails.
+    assert!(recipe_install_check(&install_lines_with_dip(step, &[6000], 60)).0);
+    let (ok, reason) = recipe_install_check(&install_lines_with_dip(step, &[6000], 61));
+    assert!(!ok);
+    assert!(
+        reason.contains("took 61 KB of the internal RAM"),
+        "{reason}"
+    );
+    let (ok, reason) = recipe_install_check(&format!(
+        "I (7000) x: script phase: {step}\nI (7100) x: recipe: thread stack 6000 of 20480 bytes never used\n"
+    ));
+    assert!(!ok);
+    assert!(reason.contains("internal RAM dip"), "{reason}");
 }
 
 /// `fw_check_script_source` on an ELF made of `bytes`, which must be `with` or `without` it.

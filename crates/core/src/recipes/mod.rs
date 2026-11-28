@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::value::RawValue;
 use solite_recipe_sdk::bounds::MAX_PARAMS_DEPTH;
 use solite_recipe_sdk::{
     Change, ChangedEquipment, Clock, ErrorKind, Event as SdkEvent, EventValue as SdkValue,
@@ -198,7 +199,7 @@ impl Native {
         }
     }
 
-    #[cfg(any(test, feature = "script-recipes"))]
+    #[cfg(test)]
     fn names_of(info: &Value) -> RecipeName {
         let text = |key: &str| {
             info.get(key)
@@ -212,11 +213,64 @@ impl Native {
         }
     }
 
+    /// The id and the name read from the JSON text, with no tree of the rest.
+    #[cfg(feature = "script-recipes")]
+    fn names_of_text(info: &str) -> RecipeName {
+        #[derive(serde::Deserialize, Default)]
+        struct Head {
+            #[serde(default)]
+            id: String,
+            #[serde(default)]
+            name: String,
+        }
+        let head: Head = serde_json::from_str(info).unwrap_or_default();
+        RecipeName {
+            id: Arc::from(head.id),
+            name: Arc::from(head.name),
+        }
+    }
+
     fn info(&self) -> Value {
         match (&self.script, &self.recipe) {
             (Some(script), _) => serde_json::from_str(&script.info).unwrap_or(Value::Null),
             (None, Some(recipe)) => recipe.info(),
             (None, None) => Value::Null,
+        }
+    }
+
+    /// The definition to serve: a script's is its own JSON text, written as it is (no tree).
+    fn info_ref(&self) -> InfoRef<'_> {
+        match &self.script {
+            Some(script) => serde_json::from_str::<&RawValue>(&script.info)
+                .map_or(InfoRef::Tree(Value::Null), InfoRef::Text),
+            None => InfoRef::Tree(self.info()),
+        }
+    }
+
+    /// The keys of the params that hold equipment ids: a script's are read from its JSON text,
+    /// slot by slot, with no tree of the definition.
+    fn equipment_keys(&self) -> Vec<String> {
+        #[derive(serde::Deserialize)]
+        struct Slot {
+            #[serde(rename = "type", default)]
+            kind: Option<String>,
+            #[serde(default)]
+            id: Option<String>,
+        }
+        #[derive(serde::Deserialize, Default)]
+        struct Head {
+            #[serde(default)]
+            slots: Vec<Slot>,
+        }
+        match &self.script {
+            Some(script) => serde_json::from_str::<Head>(&script.info)
+                .unwrap_or_default()
+                .slots
+                .into_iter()
+                .filter(|slot| slot.kind.as_deref() == Some("equipment"))
+                .filter_map(|slot| slot.id)
+                .collect(),
+            None => equipment_keys(&self.info()),
         }
     }
 
@@ -491,6 +545,21 @@ pub struct Settle {
     pub zone: Option<Id>,
 }
 
+/// A recipe's definition as it is served: a script's own JSON text, or a tree (a built-in's).
+pub enum InfoRef<'a> {
+    Text(&'a RawValue),
+    Tree(Value),
+}
+
+impl serde::Serialize for InfoRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            InfoRef::Text(text) => text.serialize(serializer),
+            InfoRef::Tree(tree) => tree.serialize(serializer),
+        }
+    }
+}
+
 /// The keys of a recipe's params that hold equipment ids: its `equipment` slots.
 fn equipment_keys(info: &Value) -> Vec<String> {
     info.get("slots")
@@ -619,14 +688,29 @@ impl RecipeEngine {
             .collect()
     }
 
-    pub fn recipe_infos(&self) -> Vec<Value> {
-        self.natives.iter().map(Native::info).collect()
+    /// Every recipe's definition, to serve as it is.
+    pub fn recipe_infos(&self) -> Vec<InfoRef<'_>> {
+        self.natives.iter().map(Native::info_ref).collect()
     }
 
     /// One recipe's definition, `None` for a recipe that does not exist.
-    pub fn recipe_info(&self, id: &str) -> Option<Value> {
+    pub fn recipe_info(&self, id: &str) -> Option<InfoRef<'_>> {
         match self.provider(id)? {
-            Provider::Native(index) => Some(self.natives[index].info()),
+            Provider::Native(index) => Some(self.natives[index].info_ref()),
+        }
+    }
+
+    /// One recipe's definition as JSON text (the answer of an install or an update adds its
+    /// `version`).
+    pub fn recipe_info_text(&self, id: &str) -> Option<String> {
+        match self.provider(id)? {
+            Provider::Native(index) => {
+                let native = &self.natives[index];
+                Some(match &native.script {
+                    Some(script) => script.info.clone(),
+                    None => native.info().to_string(),
+                })
+            }
         }
     }
 
@@ -1164,8 +1248,8 @@ impl RecipeEngine {
         clock: ScriptClock,
         origin: ScriptOrigin,
     ) -> Result<(), String> {
-        let info = recipe.info();
-        let names = Native::names_of(&info);
+        let info = recipe.info_text();
+        let names = Native::names_of_text(&info);
         match provider_of(&self.natives, &names.id) {
             Some(Provider::Native(index)) if self.natives[index].is_script() => {
                 return Err(format!("id {} is already loaded", names.id));
@@ -1187,7 +1271,7 @@ impl RecipeEngine {
                 text: origin.text,
                 limit: origin.limit,
                 declared: origin.declared,
-                info: info.to_string(),
+                info,
                 rebuild,
                 failed: None,
                 restarts: Vec::new(),
@@ -1514,7 +1598,7 @@ impl RecipeEngine {
             let gone = gone.to_string();
             for (index, slot) in self.slots.iter_mut().enumerate() {
                 let keys = match provider_of(&self.natives, &slot.instance.recipe_id) {
-                    Some(Provider::Native(p)) => equipment_keys(&self.natives[p].info()),
+                    Some(Provider::Native(p)) => self.natives[p].equipment_keys(),
                     None => Vec::new(),
                 };
                 let Ok(mut params) = serde_json::from_str::<Value>(&slot.instance.params) else {

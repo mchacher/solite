@@ -119,6 +119,22 @@ fn the_recipe_is_served_with_sowels_info_byte_for_byte() {
     );
 }
 
+#[test]
+fn the_list_of_recipes_holds_the_same_info_as_the_single_answer() {
+    let mut w = World::new(T0, false);
+    let (status, list) = w.rig.get("/api/v1/recipes");
+    assert_eq!(status, 200);
+    let pinned: Value =
+        serde_json::from_str(include_str!("pinned/recipe_schedule_on_off.json")).unwrap();
+    let entry = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "schedule-on-off")
+        .unwrap();
+    assert_eq!(entry, &pinned);
+}
+
 // ---- validation ----
 
 #[test]

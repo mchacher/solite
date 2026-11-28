@@ -247,13 +247,21 @@ fw_check_script_source() {
 # The install step of the QEMU image's script phase (spec 042, `firmware/src/script_phase.rs`), $1
 # the log: `script phase: install 201, boot load ok, uninstall 204` is there, and every `recipe:
 # thread stack <n> of 20480 bytes never used` line (one per job) keeps at least RECIPE_STACK_MARGIN
-# bytes unused. Prints the reason and returns 1 otherwise.
+# bytes unused, and `script phase: install schedule-on-off: internal RAM dip <n> KB` is at most
+# RECIPE_LOAD_DIP_KB. Prints the reason and returns 1 otherwise.
 RECIPE_STACK_MARGIN=2048
+# The most the internal RAM falls while schedule-on-off (20 slots, texts in two languages) installs:
+# 42 KB in QEMU (motion-light: 45 KB, the catalogue and the download), over 94 KB at its load alone before spec 056's
+# fix of the definition's trees.
+RECIPE_LOAD_DIP_KB=60
 fw_check_recipe_install() {
   step=$(grep -a 'script phase: install ' "$1" | tail -n 1)
   [ -n "$step" ] || { echo "the install step's line (script phase: install ...) is missing."; return 1; }
   echo "$step" | grep -qF 'install 201, boot load ok, uninstall 204' \
     || { echo "the install step went wrong: ${step#*script phase: }"; return 1; }
+  dip=$(grep -a 'script phase: install schedule-on-off: internal RAM dip ' "$1" | tail -n 1 | sed -E 's/.*dip ([0-9]+) KB.*/\1/')
+  [ -n "$dip" ] || { echo "the install step's line for schedule-on-off (internal RAM dip) is missing."; return 1; }
+  [ "$dip" -le "$RECIPE_LOAD_DIP_KB" ] || { echo "installing schedule-on-off took $dip KB of the internal RAM at its lowest, above the $RECIPE_LOAD_DIP_KB KB kept (the definition's trees, spec 056)."; return 1; }
   lines=$(grep -aoE 'recipe: thread stack [0-9]+ of 20480 bytes never used' "$1")
   [ -n "$lines" ] || { echo "the recipe thread's stack line (recipe: thread stack ...) is missing."; return 1; }
   least=$(echo "$lines" | sed -E 's/recipe: thread stack ([0-9]+) .*/\1/' | sort -n | head -n 1)

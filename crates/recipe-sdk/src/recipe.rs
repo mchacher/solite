@@ -188,6 +188,11 @@ impl Deadline {
 pub trait Recipe {
     /// Sowel's `RecipeInfo` of the recipe.
     fn info(&self) -> Value;
+    /// The same as JSON text. A recipe that holds it as text gives it without building the tree
+    /// (a big one for a script recipe, in small blocks).
+    fn info_text(&self) -> String {
+        self.info().to_string()
+    }
     /// Checks params against the home, with the recipe's messages (the engine wraps them as
     /// `Invalid params: <message>`).
     fn validate(&self, host: &dyn Host, params: &Value) -> Result<(), RecipeError>;

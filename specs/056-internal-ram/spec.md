@@ -112,4 +112,9 @@ Box, step 5 (2026-11-28, release 0.3.1 over the air from 0.3.0, 4 script recipes
 - The radio reports with the new threshold (the relay's data after each restart); pairing was not
   run.
 - Not met: the lowest point over 64 KB with `schedule-on-off` installed. The spec stays open.
-
+- **`schedule-on-off`'s load** (2026-11-28, QEMU): the 94 KB dip at its load came from the
+  definition's `serde_json::Value` trees (read, then the info built, then parsed again at
+  registration), not from QuickJS. The definition is read slot by slot and the info is a JSON text
+  served as it is: the dip is 21 KB (258,311 to 237,579 B). The QEMU run installs it too and
+  fails over a 60 KB dip (`fw_check_recipe_install`). The box's lowest point and largest block with
+  it installed: to measure again.
