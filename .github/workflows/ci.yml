@@ -93,7 +93,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ninja-build python3-venv
 
       - name: System libraries for QEMU
-        if: env.SKIP_SLOW == ''
+        if: env.SKIP_SLOW == '' || github.event_name == 'pull_request'
         run: sudo apt-get install -y libgcrypt20 libglib2.0-0 libpixman-1-0 libsdl2-2.0-0 libslirp0
 
       - name: Rust, at the version pinned in rust-toolchain.toml
@@ -155,7 +155,7 @@ jobs:
       # it would be downloaded on every run. On a miss, scripts/qemu.sh installs it (after the
       # firmware build has downloaded ESP-IDF, which the installer needs) and this step saves it.
       - name: QEMU download cache
-        if: env.SKIP_SLOW == ''
+        if: env.SKIP_SLOW == '' || github.event_name == 'pull_request'
         uses: actions/cache@v4
         with:
           path: firmware/.embuild/espressif/tools/qemu-xtensa
