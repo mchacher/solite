@@ -48,7 +48,7 @@ heap's small blocks: ESP-IDF keeps every `malloc` of at most `CONFIG_SPIRAM_MALL
 - [x] The install's step lines in the radio image's log (seen on the box).
 - [x] Every buffer that must be internal allocated as such (review in the result).
 - [x] The catalogue's answers unchanged (existing tests), its parse typed (a test of its shape).
-- [ ] On the box, 4 recipes installed, updated and removed in turn: the internal RAM's lowest
+- [x] On the box, 4 recipes installed, updated and removed in turn: the internal RAM's lowest
       point over 64 KB, written in the result with the before figure.
 - [x] The radio still reports (a device's data arrive) with the new threshold; pairing not run.
 - [x] validate green (QEMU included).
@@ -111,10 +111,13 @@ Box, step 5 (2026-11-28, release 0.3.1 over the air from 0.3.0, 4 script recipes
 - A fifth recipe is refused (`Too many script recipes (at most 4)`); installs take 5 to 11 s.
 - The radio reports with the new threshold (the relay's data after each restart); pairing was not
   run.
-- Not met: the lowest point over 64 KB with `schedule-on-off` installed. The spec stays open.
+- At 0.3.1, not met: the lowest point over 64 KB with `schedule-on-off` installed (below).
 - **`schedule-on-off`'s load** (2026-11-28, QEMU): the 94 KB dip at its load came from the
   definition's `serde_json::Value` trees (read, then the info built, then parsed again at
   registration), not from QuickJS. The definition is read slot by slot and the info is a JSON text
   served as it is: the dip is 21 KB (258,311 to 237,579 B). The QEMU run installs it too and
-  fails over a 60 KB dip (`fw_check_recipe_install`). The box's lowest point and largest block with
-  it installed: to measure again.
+  fails over a 60 KB dip (`fw_check_recipe_install`). On the box at 0.3.2 (over the air from 0.3.1,
+  2026-11-28): with `schedule-on-off` installed among 4 recipes the lowest point is 84,540 B
+  (28,348 at 0.3.1), the largest block stays 47,104 B, a `GET /recipes` moves nothing; it holds
+  about 17 KB of internal RAM while installed (the others about 2 KB). The radio reports (the
+  relay's data after the update). Spec 056 is closed.
