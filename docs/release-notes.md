@@ -7,6 +7,15 @@ alone or `## <version>` followed by a space and more text (`## 0.2.0` and `## 0.
 `## 0.2.01`) as the text of the GitHub release and of `manifest.json`. A release with no section here is
 refused before anything is built.
 
+## 0.3.2 (2026-11-28)
+
+The schedule recipe no longer squeezes the box's memory.
+
+- **`schedule-on-off` installs with room to spare**: loading a recipe with many settings used to
+  take most of the box's fast internal memory for a moment; the recipe's description is now read
+  and served as text, and the box keeps over three quarters of that memory free.
+- Nothing changes in what the recipes show or do.
+
 ## 0.3.1 (2026-11-28)
 
 More memory to spare with four recipes installed.
