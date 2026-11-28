@@ -60,3 +60,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 054 | motion-light-dimmable | F3: Sowel's `motion-light-dimmable` as a script (dimmable lights on motion, a brightness per time slot), signed and in the catalogue | 2026-11-28 | done |
 | 055 | sowel-recipes-batch | F3: Sowel's `schedule-on-off`, `state-trigger-light`, `presence-thermostat` and `state-watch` as scripts, in one batch, signed and in the catalogue | 2026-11-28 | done |
 | 056 | internal-ram | Engine study, part 1: each install step logs the internal RAM, small heap blocks go to PSRAM (always-internal threshold 512), the catalogue parsed typed; the internal RAM's lowest point over 64 KB with 4 recipes | 2026-11-28 | done |
+| 059 | sowel-api | The same API as Sowel, recipes first: the store, install, update and removal under `/plugins` (Sowel's shapes), the backup at `/backup`, the old paths removed | 2026-11-28 | draft |

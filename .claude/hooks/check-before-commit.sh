@@ -10,9 +10,9 @@ cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 
 input=$(cat)
 
-# The branch checked below is the one where the command runs (an agent's worktree), not the main
-# checkout's. The validate command runs in the main checkout: a worktree nested in it has no ESP-IDF
-# tools installed, and its first build hangs for hours.
+# The branch and the files checked below are those of the directory where the command runs (an
+# agent's worktree, or the main checkout): two iterations can run side by side, each validated on
+# its own files. `--changed` builds no firmware, so a worktree needs no ESP-IDF tools of its own.
 dir=$(printf '%s' "$input" | tr '\n' ' ' | sed -nE 's/.*"cwd" *: *"([^"]*)".*/\1/p')
 [ -d "$dir" ] || dir=.
 
@@ -29,7 +29,7 @@ case "$cmd" in
     exit 2 ;;
 esac
 
-if ! out=$(sh scripts/validate.sh --changed 2>&1); then
+if ! out=$(cd "$dir" && sh scripts/validate.sh --changed 2>&1); then
   echo "Blocked: the validate command fails. Fix the cause, never the check. Last lines:" >&2
   echo "$out" | tail -n 30 >&2
   exit 2
