@@ -278,7 +278,7 @@ edit. The rule and its check are in `CLAUDE.md` ("Docs say what is true today").
 ## Phase 4: Check
 
 ```bash
-sh scripts/validate.sh
+sh scripts/validate.sh --pre-merge   # scaled to the change; critical paths run in full, QEMU included (D87)
 ```
 
 One command, one verdict: the docs check; Rust format and lint (core, host, firmware); Rust tests;

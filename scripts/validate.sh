@@ -12,6 +12,16 @@
 #   sh scripts/validate.sh --only e2e
 #                                   opt-in, in no other run and not in the CI (it needs a browser):
 #                                   the simulated path driven in headless Chromium
+#   sh scripts/validate.sh --changed [--base <ref>]
+#                                   the development loop: the quick checks and the tests of the
+#                                   groups the change touches (`scripts/scope.sh`), no firmware build,
+#                                   no slow test, no QEMU; the UI's tests related to the changed files
+#   sh scripts/validate.sh --pre-merge [--base <ref>] [--only rust|ui|firmware]
+#                                   the pull request's verdict, scaled to the change: docs only, the
+#                                   quick checks; normal, the touched groups without the slow checks;
+#                                   critical (a path where a fault reaches the box), the touched
+#                                   groups in full, QEMU included. A group the change does not touch
+#                                   is skipped; main and the nightly run everything
 #   sh scripts/validate.sh --skip-slow [--only rust|ui|firmware]
 #                                   the same without the slow checks: the Rust tests marked
 #                                   `#[ignore = "slow: ..."]` and the engine's run in QEMU (the
@@ -27,20 +37,55 @@ cd "$(dirname "$0")/.."
 fast=false
 slow=true
 only=""
+mode=""
+base="origin/main"
 while [ $# -gt 0 ]; do
   case "$1" in
     --fast) fast=true; shift ;;
     --skip-slow) slow=false; shift ;;
+    --changed) mode=changed; slow=false; shift ;;
+    --pre-merge) mode=pre-merge; shift ;;
+    --base) base="$2"; shift 2 ;;
     --only)
       only="$2"
       case "$only" in rust | ui | firmware | e2e) ;; *) echo "validate: --only takes rust, ui, firmware or e2e" >&2; exit 2 ;; esac
       shift 2
       ;;
-    *) echo "validate: unknown option $1 (--fast, --skip-slow, --only <group>)" >&2; exit 2 ;;
+    *) echo "validate: unknown option $1 (--fast, --skip-slow, --changed, --pre-merge, --base <ref>, --only <group>)" >&2; exit 2 ;;
   esac
 done
-# True when the group is part of this run (all of them, unless --only names one).
-want() { [ -z "$only" ] || [ "$only" = "$1" ]; }
+
+# --changed and --pre-merge: the groups and the level from the change's files.
+touched="rust ui firmware"
+docs_only=false
+if [ -n "$mode" ]; then
+  scope=$(sh scripts/scope.sh "$base")
+  touched=$(printf '%s\n' "$scope" | sed -n 's/^groups: *//p')
+  level=$(printf '%s\n' "$scope" | sed -n 's/^level: *//p')
+  printf 'validate --%s: groups [%s], level %s (from the files since %s)\n' "$mode" "$touched" "$level" "$base"
+  if [ "$mode" = pre-merge ]; then
+    case "$level" in
+      docs) docs_only=true ;;
+      normal) slow=false ;;
+      critical) slow=true ;;
+    esac
+  fi
+  if [ -n "$only" ] && ! printf ' %s ' "$touched" | grep -q " $only "; then
+    # The rust third still checks the docs: every change has some.
+    if [ "$only" = rust ]; then
+      touched="rust"
+      docs_only=true
+    else
+      printf 'validate: the %s group is not touched by this change: skipped\n' "$only"
+      exit 0
+    fi
+  fi
+fi
+$docs_only && fast=true
+# True when the group is part of this run: named by --only (or every group), and touched.
+want() {
+  { [ -z "$only" ] || [ "$only" = "$1" ]; } && printf ' %s ' "$touched" | grep -q " $1 "
+}
 
 step() { printf '\n== %s\n' "$1"; }
 
@@ -55,10 +100,12 @@ if want ui && [ ! -d tools/z2m-coverage/node_modules ]; then
   exit 1
 fi
 
-if want rust; then
+if want rust || { [ -z "$only" ] && [ -n "$mode" ]; }; then
   step "Docs"
   sh scripts/check-docs.sh
+fi
 
+if want rust; then
   # The firmware is outside the workspace, yet its ESP application descriptor must carry the
   # version the core reports (spec 032 R7): the two `version` lines are the same.
   step "Versions: firmware/Cargo.toml and the workspace"
@@ -91,7 +138,12 @@ if want rust; then
   step "Sowel contract"
   cargo test -p solite-core --features script-recipes --quiet --test sowel_contract -- --nocapture solite_is_a_subset_of_sowel
 
-  if $slow; then
+  if [ "$mode" = changed ] && ! printf ' %s ' "$touched" | grep -q ' firmware '; then
+    # Only crates outside the core and the SDK: their own tests (no other crate depends on them).
+    crates=$(sh scripts/scope.sh --crates "$base")
+    step "Rust: tests of the changed crates ($crates), without the slow ones"
+    for crate in $crates; do cargo test -p "$crate" --quiet; done
+  elif $slow; then
     # The slow tests are the ignored ones: no test is ignored for any other reason.
     step "Rust: tests (core, host), the slow ones included"
     cargo test --workspace --quiet -- --include-ignored
@@ -101,7 +153,11 @@ if want rust; then
   fi
 fi
 
-if want ui; then
+if want ui && [ "$mode" = changed ]; then
+  step "UI: types, the tests related to the changed files"
+  merge=$(git merge-base "$base" HEAD 2>/dev/null || echo HEAD)
+  (cd ui && npm run -s typecheck && npx vitest run --changed "$merge" --passWithNoTests --silent)
+elif want ui; then
   step "UI: types, tests, build, budget"
   (cd ui && npm run -s typecheck && npm test --silent && npm run -s build >/dev/null && npm run -s check:bundle)
 
@@ -109,7 +165,9 @@ if want ui; then
   (cd tools/z2m-coverage && npm run -s typecheck && npm test --silent)
 fi
 
-if want firmware; then
+if want firmware && [ "$mode" = changed ]; then
+  step "Firmware: not built in the development loop (--pre-merge and the CI build it)"
+elif want firmware; then
   step "Firmware: the interface built for the radio image (ui/dist, always rebuilt: an old one would be embedded)"
   (cd ui && npm run -s build >/dev/null)
   script=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' ui/dist/index.html | head -n 1)
@@ -214,7 +272,9 @@ if [ "$only" = "e2e" ]; then
   sh scripts/e2e-sim.sh
 fi
 
-if $slow; then
+if [ -n "$mode" ]; then
+  printf '\nvalidate --%s: OK (groups [%s]%s)\n' "$mode" "$touched" "$($slow && echo ', slow checks and QEMU included' || echo ', no slow check, no QEMU')"
+elif $slow; then
   printf '\nvalidate: OK\n'
 else
   printf '\nvalidate --skip-slow: OK (the slow tests and QEMU did not run)\n'
