@@ -341,3 +341,83 @@ fn check(declared: Declared, rules: Rules) -> Result<Checked, String> {
     info.shrink_to_fit();
     Ok((info, id, version, defs, declared.has_validate == Some(true)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::sorted_keys;
+    use crate::recipes::ScriptClock;
+    use crate::recipes::script::{ScriptRecipe, ScriptRuntimes, SystemRuntimes};
+    use solite_recipe_sdk::Recipe;
+    use std::sync::Arc;
+
+    /// `sorted_keys` writes what a tree of the same text writes (`Value::to_string`, sorted keys).
+    #[test]
+    fn sorted_keys_writes_what_a_tree_writes() {
+        for text in [
+            r#"{}"#,
+            r#"[]"#,
+            r#"{"b":1,"a":{"d":[],"c":{}}}"#,
+            r#"{"z":[{"y":1,"x":2},[3,{"w":null,"v":true}]],"é":"ü","a":"\"quoted\" \\ \n"}"#,
+            r#"{"key \"with\" quotes":"été","k2":-1.5,"k1":"😀"}"#,
+            r#""text""#,
+            r#"12"#,
+        ] {
+            let mut out = String::new();
+            sorted_keys(&mut out, text).unwrap();
+            let tree: serde_json::Value = serde_json::from_str(text).unwrap();
+            let expected = tree.to_string();
+            // Same value, and the same keys in the same order (escapes may be written differently).
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&out).unwrap(),
+                tree,
+                "{text}"
+            );
+            let keys = |s: &str| -> Vec<String> {
+                let v: serde_json::Value = serde_json::from_str(s).unwrap();
+                let mut all = Vec::new();
+                fn walk(v: &serde_json::Value, all: &mut Vec<String>) {
+                    match v {
+                        serde_json::Value::Object(m) => m.iter().for_each(|(k, v)| {
+                            all.push(k.clone());
+                            walk(v, all);
+                        }),
+                        serde_json::Value::Array(a) => a.iter().for_each(|v| walk(v, all)),
+                        _ => {}
+                    }
+                }
+                walk(&v, &mut all);
+                all
+            };
+            assert_eq!(keys(&out), keys(&expected), "{text}");
+        }
+    }
+
+    fn info_of(i18n: &str) -> Result<serde_json::Value, String> {
+        let source = format!(
+            r#"recipe({{ api: 1, id: "probe", name: "Probe", version: "1.0.0", {i18n}
+                slots: {{ timeout: {{ type: "duration", defaultValue: "10m" }} }},
+                start: function (api) {{}} }});"#
+        );
+        let runtimes: Arc<dyn ScriptRuntimes> = Arc::new(SystemRuntimes);
+        let clock: ScriptClock = Arc::new(|| 0);
+        ScriptRecipe::load(&source, &runtimes, &clock).map(|(recipe, _)| recipe.info())
+    }
+
+    /// `i18n` is checked on its raw text: a string is refused, null leaves the key out, an empty
+    /// object is served as one.
+    #[test]
+    fn the_i18n_text_is_checked_and_served_as_written() {
+        let refused = info_of(r#"i18n: "x","#).map(|_| ()).unwrap_err();
+        assert!(refused.contains("i18n must be an object"), "{refused}");
+        let refused = info_of(r#"i18n: [1],"#).map(|_| ()).unwrap_err();
+        assert!(refused.contains("i18n must be an object"), "{refused}");
+        let info = info_of(r#"i18n: null,"#).unwrap();
+        assert!(info.get("i18n").is_none(), "{info}");
+        let info = info_of(r#"i18n: {},"#).unwrap();
+        assert_eq!(info["i18n"], serde_json::json!({}), "{info}");
+        let info = info_of(r#"i18n: { fr: { name: "Sonde" } },"#).unwrap();
+        assert_eq!(info["i18n"]["fr"]["name"], "Sonde", "{info}");
+        let info = info_of("").unwrap();
+        assert!(info.get("i18n").is_none(), "{info}");
+    }
+}
