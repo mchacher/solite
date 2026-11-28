@@ -127,11 +127,11 @@ fn replay(home: &Mutex<Home>, clocks: &Clocks, start: Instant) -> Result<(), Str
 }
 
 /// The version the script declares (`version: "x.y.z"`): the installed file's header must say it.
-fn script_version() -> Result<Version, String> {
-    let at = MOTION_SCRIPT_SOURCE
+fn script_version(source: &str) -> Result<Version, String> {
+    let at = source
         .find("version: \"")
         .ok_or("script phase: the script declares no version")?;
-    let text = &MOTION_SCRIPT_SOURCE[at + "version: \"".len()..];
+    let text = &source[at + "version: \"".len()..];
     let end = text.find('"').ok_or("script phase: bad version")?;
     Version::parse(&text[..end]).ok_or_else(|| "script phase: bad version".to_string())
 }
@@ -190,8 +190,14 @@ fn stats_of(home: &Mutex<Home>, id: &str) -> Option<(usize, usize)> {
 
 /// The wall time the install step passes to the core: a clock that is set (the QEMU image's is not).
 const INSTALL_WALL_MS: u64 = 1_795_252_323_120;
-/// The recipe's address in the in-memory catalogue.
-const RECIPE_URL: &str = "https://recipes.example.test/motion-light.srs";
+/// A recipe's address in the in-memory catalogue.
+fn recipe_url(id: &str) -> String {
+    format!("https://recipes.example.test/{id}.srs")
+}
+/// The recipes the install step installs: `motion-light` (the phase's own) and `schedule-on-off`
+/// (the one with the most slots and texts, whose load once took 94 KB of the internal RAM).
+const SCHEDULE_SCRIPT: &str = "schedule-on-off";
+const SCHEDULE_SCRIPT_SOURCE: &str = include_str!("../../recipes/scripts/schedule-on-off.js");
 
 /// The files of the install step, in memory: the flash is not the subject.
 #[derive(Default)]
@@ -242,7 +248,8 @@ impl Storage for MemoryFiles {
 /// The fetch adapter of the step: the catalogue and the signed file, in memory.
 struct InMemory {
     catalogue: Vec<u8>,
-    file: Vec<u8>,
+    /// The files, by address.
+    files: Vec<(String, Vec<u8>)>,
 }
 
 impl Fetcher for InMemory {
@@ -252,10 +259,12 @@ impl Fetcher for InMemory {
             etag: None,
             body: Box::new(Cursor::new(bytes.to_vec())),
         };
-        match url {
-            DEFAULT_CATALOGUE_URL => Ok(body(&self.catalogue)),
-            RECIPE_URL => Ok(body(&self.file)),
-            _ => Ok(Fetched::Status(404)),
+        if url == DEFAULT_CATALOGUE_URL {
+            return Ok(body(&self.catalogue));
+        }
+        match self.files.iter().find(|(address, _)| address == url) {
+            Some((_, file)) => Ok(body(file)),
+            None => Ok(Fetched::Status(404)),
         }
     }
 }
@@ -340,9 +349,11 @@ fn job(
     ran.ok_or_else(|| "script phase: the recipe thread panicked".to_string())
 }
 
-/// Installs `motion-light`, signed now with a key made from the ESP32's random numbers (no
-/// key in any file), from an in-memory catalogue on a `recipe` thread; loads it again as the start
-/// does, into a home of no use; uninstalls it. Logs `script phase: install 201, boot load ok,
+/// Installs `motion-light` and `schedule-on-off`, signed now with a key made from the ESP32's
+/// random numbers (no key in any file), from an in-memory catalogue that lists both, on a `recipe`
+/// thread; loads each again as the start does, into a home of no use; uninstalls them. Logs
+/// `script phase: install <id>: internal RAM dip <n> KB` for each (the lowest free internal RAM
+/// below what was free before its install) and `script phase: install 201, boot load ok,
 /// uninstall 204`. The home is left as it was: the script phase's own measures follow.
 #[allow(unsafe_code)]
 fn install_step(home: &Mutex<Home>) -> Result<(), String> {
@@ -351,23 +362,34 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
     unsafe { esp_idf_svc::sys::esp_fill_random(seed.as_mut_ptr().cast(), seed.len()) };
     let key = SigningKey::from_bytes(&seed);
     let public_hex = hex(&key.verifying_key().to_bytes());
-    let source = MOTION_SCRIPT_SOURCE.as_bytes();
-    let version = script_version()?;
-    let head = signed_bytes(
-        version,
-        u32::try_from(source.len()).map_err(|_| "script phase: script too large")?,
-        &digest(source),
-    );
-    let mut file = head.to_vec();
-    file.extend_from_slice(&key.sign(&head).to_bytes());
-    file.extend_from_slice(source);
-    debug_assert_eq!(file.len(), HEADER_BYTES + source.len());
-    let catalogue = format!(
-        r#"{{"format":1,"recipes":[{{"id":"{MOTION_SCRIPT}","version":"{version}","name":"Motion light","description":"The script recipe","size":{},"sha256":"{}","url":"{RECIPE_URL}"}}]}}"#,
-        file.len(),
-        hex(&digest(&file))
-    )
-    .into_bytes();
+    let mut files_by_url = Vec::new();
+    let mut entries = Vec::new();
+    let mut versions = Vec::new();
+    for (id, text) in [
+        (MOTION_SCRIPT, MOTION_SCRIPT_SOURCE),
+        (SCHEDULE_SCRIPT, SCHEDULE_SCRIPT_SOURCE),
+    ] {
+        let version = script_version(text)?;
+        let source = text.as_bytes();
+        let head = signed_bytes(
+            version,
+            u32::try_from(source.len()).map_err(|_| "script phase: script too large")?,
+            &digest(source),
+        );
+        let mut file = head.to_vec();
+        file.extend_from_slice(&key.sign(&head).to_bytes());
+        file.extend_from_slice(source);
+        debug_assert_eq!(file.len(), HEADER_BYTES + source.len());
+        entries.push(format!(
+            r#"{{"id":"{id}","version":"{version}","name":"Recipe","description":"The script recipe","size":{},"sha256":"{}","url":"{}"}}"#,
+            file.len(),
+            hex(&digest(&file)),
+            recipe_url(id)
+        ));
+        files_by_url.push((recipe_url(id), file));
+        versions.push((id, version));
+    }
+    let catalogue = format!(r#"{{"format":1,"recipes":[{}]}}"#, entries.join(",")).into_bytes();
     let (installs, line) =
         RecipeInstalls::from_key_text(Some(&public_hex), Arc::new(crate::memory::EspProbe));
     log::info!("script phase: {line}");
@@ -376,40 +398,63 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
     // The home that runs is given the throwaway key for the step, and gets the real one back.
     let kept = lock(home).recipe_installs().clone();
     lock(home).set_recipe_installs(installs.clone());
-    let installed = job(
-        home,
-        Op::Install {
-            id: MOTION_SCRIPT.to_string(),
-        },
-        &files,
-        InMemory {
-            catalogue: catalogue.clone(),
-            file: file.clone(),
-        },
-        &runtimes,
-    );
-    // As at start: the files read, checked again and loaded, into a home of no use.
-    let booted = {
-        let mut scratch = Home::new(INSTALL_WALL_MS);
-        scratch.set_recipe_installs(installs);
-        let lines = scratch.load_installed_scripts(&files, &runtimes, &scripts::clock());
-        lines.iter().any(|l| {
-            l.starts_with(&format!(
-                "recipes: script {MOTION_SCRIPT} {version} installed"
-            ))
-        })
+    let fetcher = || InMemory {
+        catalogue: catalogue.clone(),
+        files: files_by_url.clone(),
     };
-    let removed = job(
-        home,
-        Op::Uninstall {
-            id: MOTION_SCRIPT.to_string(),
-        },
-        &files,
-        InMemory { catalogue, file },
-        &runtimes,
-    );
+    let (mut installed, mut booted, mut removed) = (201, true, 204);
+    for (id, version) in versions {
+        // The install's own window of the lowest free internal RAM.
+        measure::stop_local_minimum();
+        measure::start_local_minimum();
+        let free_before = memory::read().internal_free;
+        let done = job(
+            home,
+            Op::Install { id: id.to_string() },
+            &files,
+            fetcher(),
+            &runtimes,
+        );
+        let (lowest, _) = measure::local_minimums();
+        log::info!(
+            "script phase: install {id}: internal RAM dip {} KB",
+            free_before.saturating_sub(lowest) / 1024
+        );
+        // As at start: the files read, checked again and loaded, into a home of no use.
+        let loaded = {
+            let mut scratch = Home::new(INSTALL_WALL_MS);
+            scratch.set_recipe_installs(installs.clone());
+            let lines = scratch.load_installed_scripts(&files, &runtimes, &scripts::clock());
+            lines
+                .iter()
+                .any(|l| l.starts_with(&format!("recipes: script {id} {version} installed")))
+        };
+        let gone = job(
+            home,
+            Op::Uninstall { id: id.to_string() },
+            &files,
+            fetcher(),
+            &runtimes,
+        );
+        installed = match done {
+            Ok(201) => installed,
+            Ok(other) => other,
+            Err(e) => {
+                lock(home).set_recipe_installs(kept.clone());
+                return Err(e);
+            }
+        };
+        booted &= loaded;
+        removed = match gone {
+            Ok(204) => removed,
+            Ok(other) => other,
+            Err(e) => {
+                lock(home).set_recipe_installs(kept.clone());
+                return Err(e);
+            }
+        };
+    }
     lock(home).set_recipe_installs(kept);
-    let (installed, removed) = (installed?, removed?);
     log::info!(
         "script phase: install {installed}, boot load {}, uninstall {removed}",
         if booted { "ok" } else { "failed" }

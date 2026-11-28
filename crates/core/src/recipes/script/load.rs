@@ -8,7 +8,8 @@ use std::sync::Arc;
 use rquickjs::context::intrinsic::{Date, Eval, Json, MapSet, Promise};
 use rquickjs::{Context, Object};
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::Value;
+use serde_json::value::RawValue;
 use solite_recipe_sdk::bounds::MAX_LISTEN_EQUIPMENTS;
 use solite_recipe_sdk::bounds::MAX_STATE_BYTES;
 
@@ -17,7 +18,7 @@ use super::limits::{
     SCRIPT_LOAD_LIMIT_MS, ScriptRuntimes,
 };
 use super::runtime::{Parts, SHIM_GLOBAL, ScriptRecipe, describe, register};
-use super::slots::{info_slots, parse_slots};
+use super::slots::{info_slots_text, parse_slots_raw};
 use crate::home::CLOCK_SET_AFTER_MS;
 use crate::recipes::ScriptClock;
 
@@ -44,8 +45,8 @@ struct Declared {
     name: Option<Value>,
     description: Option<Value>,
     icon: Option<Value>,
-    i18n: Option<Value>,
-    slots: Option<Vec<(String, Value)>>,
+    i18n: Option<Box<RawValue>>,
+    slots: Option<Vec<(String, Box<RawValue>)>>,
     #[serde(rename = "hasStart")]
     has_start: Option<bool>,
     #[serde(rename = "hasValidate")]
@@ -208,12 +209,61 @@ pub fn load(
 }
 
 type Checked = (
-    Value,
+    String,
     String,
     Option<String>,
     Vec<super::slots::SlotDef>,
     bool,
 );
+
+/// The `RecipeInfo` as it is served, its keys in the order a JSON object of Sowel's has them
+/// when serialized sorted.
+#[derive(serde::Serialize)]
+struct Info<'a> {
+    description: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    i18n: Option<&'a RawValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon: Option<&'a str>,
+    id: &'a str,
+    name: &'a str,
+    slots: &'a RawValue,
+}
+
+/// A JSON text with the keys of every object in sorted order, as a `serde_json::Value` writes it
+/// (the order the API serves has always had), made from the pieces of the text: each value is
+/// borrowed, only the keys of the object being written are copied, so no tree of the whole text
+/// is built (a tree of the `i18n` text is the biggest of a load, in small blocks).
+fn sorted_keys(out: &mut String, text: &str) -> Result<(), serde_json::Error> {
+    match text.as_bytes().first() {
+        Some(b'{') => {
+            let fields: std::collections::BTreeMap<String, &RawValue> = serde_json::from_str(text)?;
+            out.push('{');
+            for (n, (key, value)) in fields.iter().enumerate() {
+                if n > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::to_string(key)?);
+                out.push(':');
+                sorted_keys(out, value.get())?;
+            }
+            out.push('}');
+        }
+        Some(b'[') => {
+            let items: Vec<&RawValue> = serde_json::from_str(text)?;
+            out.push('[');
+            for (n, item) in items.iter().enumerate() {
+                if n > 0 {
+                    out.push(',');
+                }
+                sorted_keys(out, item.get())?;
+            }
+            out.push(']');
+        }
+        _ => out.push_str(text),
+    }
+    Ok(())
+}
 
 /// Checks what the script declared and builds the `RecipeInfo`.
 fn check(declared: Declared, rules: Rules) -> Result<Checked, String> {
@@ -255,10 +305,12 @@ fn check(declared: Declared, rules: Rules) -> Result<Checked, String> {
         return Err("version must be x.y.z".to_string());
     }
     let icon = text(&declared.icon, "icon")?;
-    if !matches!(
-        declared.i18n,
-        None | Some(Value::Null) | Some(Value::Object(_))
-    ) {
+    // `i18n` stays the script's own text: a tree of it is the biggest one a load would build.
+    if declared
+        .i18n
+        .as_ref()
+        .is_some_and(|raw| !raw.get().starts_with('{'))
+    {
         return Err("i18n must be an object".to_string());
     }
     if declared.has_start != Some(true) {
@@ -267,23 +319,105 @@ fn check(declared: Declared, rules: Rules) -> Result<Checked, String> {
     let Some(declared_slots) = declared.slots else {
         return Err("slots must be an object".to_string());
     };
-    let defs = parse_slots(&declared_slots)?;
-    let mut info = Map::new();
-    info.insert("id".into(), json!(id));
-    info.insert("name".into(), json!(name));
-    info.insert("description".into(), json!(description));
-    info.insert("slots".into(), info_slots(&defs));
-    if let Some(icon) = icon {
-        info.insert("icon".into(), json!(icon));
+    let defs = parse_slots_raw(&declared_slots)?;
+    let i18n = match declared.i18n.as_deref() {
+        Some(raw) => {
+            let mut sorted = String::with_capacity(raw.get().len());
+            sorted_keys(&mut sorted, raw.get()).map_err(|e| format!("bad definition: {e}"))?;
+            Some(RawValue::from_string(sorted).map_err(|e| format!("bad definition: {e}"))?)
+        }
+        None => None,
+    };
+    let mut info = serde_json::to_string(&Info {
+        description: &description,
+        i18n: i18n.as_deref(),
+        icon: icon.as_deref(),
+        id: &id,
+        name: &name,
+        slots: &RawValue::from_string(info_slots_text(&defs))
+            .map_err(|e| format!("bad definition: {e}"))?,
+    })
+    .map_err(|e| format!("bad definition: {e}"))?;
+    info.shrink_to_fit();
+    Ok((info, id, version, defs, declared.has_validate == Some(true)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sorted_keys;
+    use crate::recipes::ScriptClock;
+    use crate::recipes::script::{ScriptRecipe, ScriptRuntimes, SystemRuntimes};
+    use solite_recipe_sdk::Recipe;
+    use std::sync::Arc;
+
+    /// `sorted_keys` writes what a tree of the same text writes (`Value::to_string`, sorted keys).
+    #[test]
+    fn sorted_keys_writes_what_a_tree_writes() {
+        for text in [
+            r#"{}"#,
+            r#"[]"#,
+            r#"{"b":1,"a":{"d":[],"c":{}}}"#,
+            r#"{"z":[{"y":1,"x":2},[3,{"w":null,"v":true}]],"é":"ü","a":"\"quoted\" \\ \n"}"#,
+            r#"{"key \"with\" quotes":"été","k2":-1.5,"k1":"😀"}"#,
+            r#""text""#,
+            r#"12"#,
+        ] {
+            let mut out = String::new();
+            sorted_keys(&mut out, text).unwrap();
+            let tree: serde_json::Value = serde_json::from_str(text).unwrap();
+            let expected = tree.to_string();
+            // Same value, and the same keys in the same order (escapes may be written differently).
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&out).unwrap(),
+                tree,
+                "{text}"
+            );
+            let keys = |s: &str| -> Vec<String> {
+                let v: serde_json::Value = serde_json::from_str(s).unwrap();
+                let mut all = Vec::new();
+                fn walk(v: &serde_json::Value, all: &mut Vec<String>) {
+                    match v {
+                        serde_json::Value::Object(m) => m.iter().for_each(|(k, v)| {
+                            all.push(k.clone());
+                            walk(v, all);
+                        }),
+                        serde_json::Value::Array(a) => a.iter().for_each(|v| walk(v, all)),
+                        _ => {}
+                    }
+                }
+                walk(&v, &mut all);
+                all
+            };
+            assert_eq!(keys(&out), keys(&expected), "{text}");
+        }
     }
-    if let Some(i18n @ Value::Object(_)) = declared.i18n {
-        info.insert("i18n".into(), i18n);
+
+    fn info_of(i18n: &str) -> Result<serde_json::Value, String> {
+        let source = format!(
+            r#"recipe({{ api: 1, id: "probe", name: "Probe", version: "1.0.0", {i18n}
+                slots: {{ timeout: {{ type: "duration", defaultValue: "10m" }} }},
+                start: function (api) {{}} }});"#
+        );
+        let runtimes: Arc<dyn ScriptRuntimes> = Arc::new(SystemRuntimes);
+        let clock: ScriptClock = Arc::new(|| 0);
+        ScriptRecipe::load(&source, &runtimes, &clock).map(|(recipe, _)| recipe.info())
     }
-    Ok((
-        Value::Object(info),
-        id,
-        version,
-        defs,
-        declared.has_validate == Some(true),
-    ))
+
+    /// `i18n` is checked on its raw text: a string is refused, null leaves the key out, an empty
+    /// object is served as one.
+    #[test]
+    fn the_i18n_text_is_checked_and_served_as_written() {
+        let refused = info_of(r#"i18n: "x","#).map(|_| ()).unwrap_err();
+        assert!(refused.contains("i18n must be an object"), "{refused}");
+        let refused = info_of(r#"i18n: [1],"#).map(|_| ()).unwrap_err();
+        assert!(refused.contains("i18n must be an object"), "{refused}");
+        let info = info_of(r#"i18n: null,"#).unwrap();
+        assert!(info.get("i18n").is_none(), "{info}");
+        let info = info_of(r#"i18n: {},"#).unwrap();
+        assert_eq!(info["i18n"], serde_json::json!({}), "{info}");
+        let info = info_of(r#"i18n: { fr: { name: "Sonde" } },"#).unwrap();
+        assert_eq!(info["i18n"]["fr"]["name"], "Sonde", "{info}");
+        let info = info_of("").unwrap();
+        assert!(info.get("i18n").is_none(), "{info}");
+    }
 }

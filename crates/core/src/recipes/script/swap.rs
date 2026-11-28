@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 
-use serde_json::Value;
 use solite_recipe_sdk::Recipe;
 
 use super::load::{self, Rules};
@@ -209,12 +208,12 @@ impl RecipeEngine {
         runtimes: &Arc<dyn ScriptRuntimes>,
         clock: &ScriptClock,
     ) {
-        let info = recipe.info();
+        let info = recipe.info_text();
         let native = &mut self.natives[provider];
-        native.names = Native::names_of(&info);
+        native.names = Native::names_of_text(&info);
         native.recipe = Some(recipe);
         if let Some(meta) = native.script.as_mut() {
-            meta.info = info.to_string();
+            meta.info = info;
             meta.rebuild = rebuild_of(&text, runtimes, clock, Rules::INSTALLED);
             meta.text = text;
             meta.source = ScriptSource::Installed { version };
@@ -336,16 +335,9 @@ impl RecipeEngine {
         }
         let loaded =
             load::load(source, runtimes, clock, Rules::INSTALLED).and_then(|(recipe, summary)| {
-                let declared = recipe
-                    .info()
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                if declared.as_deref() != Some(id) {
-                    return Err(format!(
-                        "id {} differs from {id}",
-                        declared.unwrap_or_default()
-                    ));
+                let declared = Native::names_of_text(&recipe.info_text()).id;
+                if &*declared != id {
+                    return Err(format!("id {declared} differs from {id}"));
                 }
                 if summary.version.as_deref().and_then(Version::parse) != Some(version) {
                     return Err("version differs from the signed one".to_string());

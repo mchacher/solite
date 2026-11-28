@@ -171,14 +171,14 @@ impl Home {
 
     /// The file is written: the instances kept for the recipe start if they are enabled, a
     /// refused file of that id is no more. The recipe's definition.
-    pub(crate) fn install_commit(&mut self, id: &str, wall: u64) -> Option<serde_json::Value> {
+    pub(crate) fn install_commit(&mut self, id: &str, wall: u64) -> Option<String> {
         self.install.refused.retain(|refused| refused.id != id);
         self.keep_file(id);
         let mono = self.mono(wall);
         self.with_engine(|engine, home| {
             engine.start_recipe_instances(home, id, "Failed to start", wall, mono);
         });
-        self.recipes.recipe_info(id)
+        self.recipes.recipe_info_text(id)
     }
 
     /// A file just written is not one the saver removes later (a factory reset queued it).
@@ -248,13 +248,13 @@ impl Home {
     }
 
     /// The new file is written: the instances start again with their settings.
-    pub(crate) fn update_commit(&mut self, id: &str, wall: u64) -> Option<serde_json::Value> {
+    pub(crate) fn update_commit(&mut self, id: &str, wall: u64) -> Option<String> {
         self.keep_file(id);
         let mono = self.mono(wall);
         self.with_engine(|engine, home| {
             engine.start_recipe_instances(home, id, "Failed to restart", wall, mono);
         });
-        self.recipes.recipe_info(id)
+        self.recipes.recipe_info_text(id)
     }
 
     /// The new file could not be written: the new runtime is dropped and the old file loaded again,
