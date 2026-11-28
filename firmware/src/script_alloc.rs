@@ -183,3 +183,32 @@ impl ScriptRuntimes for EspRuntimes {
         0
     }
 }
+
+/// The runtimes of the engine study (spec 057, the QEMU image only): the same allocator with a
+/// limit that holds several recipes in one runtime (the layouts the study measures); never the
+/// engine's own, so no recipe is ever held to it.
+#[cfg(feature = "sim")]
+pub struct StudyRuntimes;
+
+#[cfg(feature = "sim")]
+impl ScriptRuntimes for StudyRuntimes {
+    fn new_runtime(&self) -> Result<NewRuntime, String> {
+        let refused = Arc::new(AtomicBool::new(false));
+        let held: HeldCounter = Arc::new(AtomicUsize::new(0));
+        let runtime = Runtime::new_with_alloc(PsramAllocator::new(
+            1536 * 1024,
+            Arc::clone(&refused),
+            Arc::clone(&held),
+        ))
+        .map_err(|e| e.to_string())?;
+        Ok(NewRuntime {
+            runtime,
+            refused: Some(refused),
+            held: Some(held),
+        })
+    }
+
+    fn quickjs_limit(&self) -> usize {
+        0
+    }
+}
