@@ -1775,6 +1775,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   critical (firmware, memory tests, update, backup, radio, storage, recipe installs and scripts,
   dependencies, CI and release scripts), the touched groups in full, QEMU included. main (`--skip-slow`)
   and the nightly run (full) keep every group, the net for what the scope misses; the full run also
-  comes before a box session. The commit hook stays `--fast`.
+  comes before a box session. The git hook stays `--fast`; Claude's commit hook runs `--changed`
+  (it ran `--skip-slow`, about 5 minutes and four firmware builds per commit).
 - **Rejected**: the full verdict before every commit (D9's first form): its cost grew with the
   firmware images and QEMU until it set the pace of the work.

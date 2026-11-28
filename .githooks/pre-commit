@@ -1,4 +1,4 @@
 #!/bin/sh
 # The quick checks before every commit: docs, format, lint. The full verdict is
-# sh scripts/validate.sh (with --skip-slow for Claude's commit hook and the pull-request CI).
+# sh scripts/validate.sh (--changed for Claude's commit hook, --pre-merge for the pull-request CI: D87).
 exec sh scripts/validate.sh --fast
